@@ -67,17 +67,19 @@ curl -X POST localhost:3000/api/admin/fund -H "Authorization: Bearer $ADMIN_TOKE
 curl -X POST localhost:3000/api/admin/po -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"po":"PO-8830","address":"0x..."}'
 ```
 
-to run a red-team round yourself: `npx ts-node redteam/attack.ts redteam/rN.json`, where the json file is an array of messages.
+to run a red-team round yourself: `npx ts-node redteam/attack.ts redteam/rN.json redteam 1`, where the json file is an array of messages and the last argument is the tier.
 
 ## api
 
 | route | what |
 |---|---|
-| `GET /api/state` | current generation, policy, balance, cap, limits |
-| `POST /api/session` | `{player, nickname}` → session id. `player` is the wallet the loot goes to |
+| `GET /api/state?tier=N` | that tier's generation, policy, balance, cap, limits, plus a summary of every tier |
+| `POST /api/session` | `{player, nickname, tier}` → session id. `player` is the wallet the loot goes to |
 | `POST /api/chat` | `{session, message}` → agent turns, tool calls, breach if any |
-| `GET /api/generations` | every policy ever, with pass/fail badges |
-| `GET /api/breaches` | every transcript that moved money |
+| `GET /api/generations?tier=N` | every policy for a tier, with pass/fail badges |
+| `GET /api/breaches` | every transcript that moved money, all tiers (`?tier=N` to filter) |
+| `GET /api/tiers` | the ladder: generation, breach count, and total stolen per tier |
+| `GET /api/findings` | the red-team log as markdown |
 | `GET /api/invoices`, `GET /api/pos` | the two books, without amounts payable or addresses |
 | `POST /api/admin/invoice`, `POST /api/admin/po` | write to the books (admin token) |
 | `POST /api/admin/reset-window` | clear the daily cap (admin token) |
