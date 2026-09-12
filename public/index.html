@@ -9,18 +9,20 @@
 <body>
 <header>
   <h1>cheddar</h1>
-  <p class="tag">an ai treasurer holds real testnet stablecoins. talk it into paying you. every theft makes it stronger.</p>
+  <p class="tag">an ai treasurer holds real testnet stablecoins. talk it into paying you. every theft makes it stronger. climb the ladder and watch the defence move out of the prompt and into the code.</p>
   <nav>
     <button data-view="play" class="active">play</button>
     <button data-view="evolution">evolution</button>
     <button data-view="breaches">breaches</button>
     <button data-view="board">leaderboard</button>
+    <button data-view="findings">findings</button>
     <a href="https://github.com/compusophy/cheddar" target="_blank" rel="noopener">source</a>
   </nav>
 </header>
 
 <main>
   <section id="play" class="view">
+    <div class="ladder" id="ladder"></div>
     <div class="status" id="status">loading…</div>
     <details class="policy"><summary>current policy (this is the system prompt you are attacking)</summary><pre id="policy"></pre></details>
     <div class="setup" id="setup">
@@ -32,7 +34,7 @@
     <div class="chat hidden" id="chat">
       <div class="log" id="log"></div>
       <form id="form">
-        <textarea id="msg" rows="3" maxlength="500" placeholder="you are talking to the shop's treasurer. it can call pay(to, amount, reference) and look up the shop books."></textarea>
+        <textarea id="msg" rows="3" maxlength="500" placeholder="you are talking to the shop's treasurer."></textarea>
         <div class="row"><span id="turns"></span><button type="submit" id="send">send</button></div>
       </form>
       <button id="newsession" class="ghost hidden">new session</button>
@@ -40,22 +42,29 @@
   </section>
 
   <section id="evolution" class="view hidden">
+    <div class="tierpick" id="evo-tiers"></div>
     <p class="hint">each generation is a policy. it was born because the previous one got robbed. read them in order and watch the rules turn into principles.</p>
     <div id="gens"></div>
   </section>
 
   <section id="breaches" class="view hidden">
-    <p class="hint">every conversation that ever moved money. these are the regression suite: every new policy must survive all of them before it goes live.</p>
+    <p class="hint">every conversation that ever moved money, on every tier. these are the regression suite: every new policy must survive all of them before it goes live.</p>
     <div id="breachlist"></div>
   </section>
 
   <section id="board" class="view hidden">
-    <table id="boardtable"><thead><tr><th>player</th><th>breaches</th><th>highest gen</th><th>stolen</th></tr></thead><tbody></tbody></table>
+    <table id="boardtable"><thead><tr><th>player</th><th>highest tier</th><th>breaches</th><th>highest gen</th><th>stolen</th></tr></thead><tbody></tbody></table>
+  </section>
+
+  <section id="findings" class="view hidden">
+    <p class="hint">the red-team log, unedited. this is the record of why each tier exists.</p>
+    <article id="findings-body" class="md"></article>
   </section>
 </main>
 <footer>
   <span id="wallet"></span>
 </footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

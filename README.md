@@ -6,7 +6,19 @@ cheddar started as [say cheese](https://github.com/compusophy) with money as the
 
 nothing is simulated. every `pay()` is a tip-20 transfer on tempo moderato (chain 42431), every breach has a transaction hash, and the server refuses to boot without a real wallet key.
 
-## how it works now
+## the ladder
+
+the fully grounded treasurer cannot be beaten through chat, which is the right property for a payments agent and the wrong property for a game. so cheddar keeps every stage of the hardening as a playable tier, each with its own generation chain and its own immune loop:
+
+| tier | tools | where the defence lives |
+|---|---|---|
+| **1 · prompt** | `pay(to, amount)` | entirely in the system prompt, including three confidential purchase orders. this is where the rules-to-principles evolution happens |
+| **2 · registry** | `pay` + `lookup_po` | purchase orders live in a registry the treasurer can read and you cannot write. it still has to choose to consult it |
+| **3 · ledger** | `pay(to, amount, reference)` + `lookup_po` | every payment must cite a reference the books resolve. the code decides the payee and ceiling, not the model |
+
+the leaderboard ranks by highest tier breached. the red-team log is served in the site under **findings**, because it is the argument for why each tier exists.
+
+## how tier 3 works
 
 the treasurer has two tools: `pay(to, amount, reference)` and `lookup_po(reference)`. every payment must cite a reference, which the code resolves against two books the shop keeps:
 

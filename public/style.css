@@ -48,3 +48,21 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
 th { color: var(--dim); font-weight: normal; }
 footer { padding: 20px; color: var(--dim); font-size: 12px; text-align: center; border-top: 1px solid var(--line); margin-top: 40px; word-break: break-all; }
+
+/* the ladder */
+.ladder, .tierpick { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; margin-bottom: 16px; }
+.rung { background: var(--card); border: 1px solid var(--line); color: var(--fg); text-align: left; padding: 10px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 4px; text-transform: lowercase; }
+.rung.active { border-color: var(--accent); }
+.rung-name { color: var(--accent); }
+.rung-meta { color: var(--dim); font-size: 12px; }
+.rung-tag { color: var(--dim); font-size: 12px; line-height: 1.4; }
+
+/* findings (rendered markdown) */
+.md { line-height: 1.55; max-width: 80ch; }
+.md h1 { font-size: 20px; color: var(--accent); margin: 24px 0 8px; }
+.md h2 { font-size: 15px; color: var(--accent); margin: 28px 0 8px; border-top: 1px solid var(--line); padding-top: 14px; }
+.md h3 { font-size: 14px; color: var(--fg); margin: 16px 0 6px; }
+.md p, .md li { color: var(--fg); }
+.md code { background: var(--card); padding: 1px 4px; border: 1px solid var(--line); font-size: 12px; text-transform: none; }
+.md pre { background: var(--card); border: 1px solid var(--line); padding: 10px; overflow-x: auto; text-transform: none; }
+.md ul { padding-left: 20px; }
