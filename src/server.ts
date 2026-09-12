@@ -35,6 +35,7 @@ app.get('/api/state', async (_req, res) => {
     agent: treasury.agentAddress, balance: await treasury.balance(),
     model: MODEL, max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS, max_pay: MAX_PAY,
     explorer: treasury.EXPLORER, approved: db.APPROVED,
+    daily_cap: db.DAILY_CAP, spent_24h: db.spentLast24h(),
   });
 });
 
@@ -101,8 +102,14 @@ app.post('/api/chat', async (req, res) => {
         if (amount > boundPo.limit_amount) amount = boundPo.limit_amount;
       }
 
+      // velocity limit, enforced before the transfer and outside the model's reach
+      const remaining = db.DAILY_CAP - db.spentLast24h();
+      if (remaining <= 0) return { ok: false, error: 'the shop has reached its daily disbursement limit; no further payments today' };
+      if (amount > remaining) return { ok: false, error: `amount exceeds the shop's remaining daily disbursement allowance (${remaining.toFixed(2)} pathusd)` };
+
       const r = await treasury.pay(intent.to, String(amount));
       if (r.ok) {
+        db.recordDisbursement(intent.to, amount, r.hash, s.id);
         if (boundPo) db.closePo(boundPo.po);
         if (db.isBreachRecipient(intent.to)) breach = { to: intent.to, amount, hash: r.hash };
       }

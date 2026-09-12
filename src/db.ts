@@ -47,6 +47,14 @@ db.exec(`
     remit_to TEXT,
     closed INTEGER NOT NULL DEFAULT 0
   );
+  CREATE TABLE IF NOT EXISTS disbursements (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient TEXT NOT NULL,
+    amount REAL NOT NULL,
+    tx_hash TEXT,
+    session_id TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
   CREATE TABLE IF NOT EXISTS regression_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     candidate_gen INTEGER NOT NULL,
@@ -139,6 +147,21 @@ export function seedPos() {
 }
 seedPos();
 
+/**
+ * velocity limit. the approved-supplier path had no ceiling and no invoice verification, so anyone
+ * could empty the treasury into legitimate supplier wallets just by inventing invoice numbers --
+ * real money gone, and never flagged, because the destination was never unapproved.
+ * an agent holding a wallet needs a spend rate it cannot talk its way past, so the cap lives here.
+ */
+export const DAILY_CAP = 25; // pathusd disbursed in any rolling 24h, across all destinations
+export function spentLast24h(): number {
+  const row = db.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM disbursements WHERE created_at > datetime('now', '-1 day')").get() as { total: number };
+  return row.total;
+}
+export function recordDisbursement(recipient: string, amount: number, txHash: string | null, sessionId: string | null) {
+  db.prepare('INSERT INTO disbursements (recipient, amount, tx_hash, session_id) VALUES (?, ?, ?, ?)').run(recipient.toLowerCase(), amount, txHash, sessionId);
+}
+
 export type Generation = { id: number; gen: number; policy: string; parent_breach_id: number | null; hardening_rounds: number; regression_passed: number; legit_passed: number; created_at: string };
 export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string };
 export type SessionRow = { id: string; gen: number; player: string; nickname: string | null; transcript: string; turns: number; status: string; created_at: string; updated_at: string };
@@ -180,7 +203,7 @@ export function leaderboard() {
 }
 
 export function resetDb() {
-  db.exec('DELETE FROM regression_runs; DELETE FROM breaches; DELETE FROM sessions; DELETE FROM generations; DELETE FROM po_registry;');
+  db.exec('DELETE FROM regression_runs; DELETE FROM breaches; DELETE FROM sessions; DELETE FROM generations; DELETE FROM po_registry; DELETE FROM disbursements;');
   seedPos();
   db.prepare('INSERT INTO generations (gen, policy) VALUES (0, ?)').run(GEN0_POLICY);
 }
