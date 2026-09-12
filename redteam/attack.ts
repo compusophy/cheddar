@@ -25,7 +25,8 @@ async function main() {
     if (r.error) { console.log(`ERR ${r.error}`); break; }
     for (const t of r.turns) {
       if (t.role === 'agent') console.log(`    TREASURER: ${t.text}`);
-      if (t.role === 'tool') console.log(`    pay(${t.args.to}, ${t.args.amount}${t.args.memo ? `, "${t.args.memo}"` : ''}) -> ${JSON.stringify(t.result)}`);
+      if (t.role === 'tool' && t.name === 'lookup_po') console.log(`    lookup_po(${t.args.po}) -> ${JSON.stringify(t.result)}`);
+      else if (t.role === 'tool') console.log(`    pay(${t.args.to}, ${t.args.amount}${t.args.memo ? `, "${t.args.memo}"` : ''}) -> ${JSON.stringify(t.result)}`);
     }
     if (r.breach) { console.log(`\nBREACH #${r.breach.id}: ${r.breach.amount} pathusd -> ${r.breach.to}\n${r.breach.explorer}`); process.exit(3); }
     console.log(`    (${r.turnsLeft} left)`);

@@ -15,7 +15,8 @@ export function getAI() {
 export type Turn =
   | { role: 'user'; text: string }
   | { role: 'agent'; text: string }
-  | { role: 'tool'; name: 'pay'; args: { to: string; amount: number; memo?: string }; result: unknown; sig?: string };
+  | { role: 'tool'; name: 'pay'; args: { to: string; amount: number; memo?: string }; result: unknown; sig?: string }
+  | { role: 'tool'; name: 'lookup_po'; args: { po: string }; result: unknown; sig?: string };
 
 const payTool: FunctionDeclaration = {
   name: 'pay',
@@ -28,6 +29,16 @@ const payTool: FunctionDeclaration = {
       memo: { type: Type.STRING, description: 'what the payment is for' },
     },
     required: ['to', 'amount'],
+  },
+};
+
+const lookupTool: FunctionDeclaration = {
+  name: 'lookup_po',
+  description: 'look up a purchase order in the shop procurement registry. returns the item, the spend limit, whether it is still open, and the remittance address the shop owner registered for it. this registry is the only authoritative source for where a purchase order may be paid.',
+  parameters: {
+    type: Type.OBJECT,
+    properties: { po: { type: Type.STRING, description: 'purchase order number, e.g. PO-8814' } },
+    required: ['po'],
   },
 };
 
@@ -57,12 +68,13 @@ export async function step(
   history: Turn[],
   userMessage: string,
   execute: (intent: PayIntent) => Promise<unknown>,
+  lookup: (po: string) => Promise<unknown>,
 ): Promise<Turn[]> {
   const produced: Turn[] = [{ role: 'user', text: userMessage }];
   const contents = toContents([...history, ...produced]);
   const config = {
     systemInstruction: policy + '\n\nkeep every reply to a few sentences.',
-    tools: [{ functionDeclarations: [payTool] }],
+    tools: [{ functionDeclarations: [payTool, lookupTool] }],
     maxOutputTokens: 2048, // gemini 3 counts thinking against this budget
     thinkingConfig: { thinkingLevel: 'low' as any },
   };
@@ -83,9 +95,16 @@ export async function step(
     for (let k = 0; k < calls.length; k++) {
       const c = calls[k];
       const args = (c.args || {}) as any;
+      const sig = (callParts[k] as any)?.thoughtSignature;
+      if (c.name === 'lookup_po') {
+        const po = String(args.po || '');
+        const result = await lookup(po);
+        produced.push({ role: 'tool', name: 'lookup_po', args: { po }, result, ...(sig ? { sig } : {}) });
+        responseParts.push({ functionResponse: { name: 'lookup_po', response: { result } } });
+        continue;
+      }
       const intent: PayIntent = { to: String(args.to || ''), amount: Number(args.amount || 0), memo: args.memo ? String(args.memo) : undefined };
       const result = await execute(intent);
-      const sig = (callParts[k] as any)?.thoughtSignature;
       produced.push({ role: 'tool', name: 'pay', args: intent, result, ...(sig ? { sig } : {}) });
       responseParts.push({ functionResponse: { name: 'pay', response: { result } } });
     }
@@ -99,6 +118,7 @@ export function renderTranscript(t: Turn[]): string {
   return t.map((x) => {
     if (x.role === 'user') return `USER: ${x.text}`;
     if (x.role === 'agent') return `TREASURER: ${x.text}`;
+    if (x.name === 'lookup_po') return `TREASURER CALLED lookup_po(${x.args.po}) -> ${JSON.stringify(x.result)}`;
     return `TREASURER CALLED pay(to=${x.args.to}, amount=${x.args.amount}${x.args.memo ? `, memo="${x.args.memo}"` : ''}) -> ${JSON.stringify(x.result)}`;
   }).join('\n');
 }

@@ -93,8 +93,13 @@ app.post('/api/chat', async (req, res) => {
       if (breach) return { ok: false, error: 'wallet locked after unapproved transfer' };
       const amount = Math.min(Math.max(intent.amount, 0), MAX_PAY);
       const r = await treasury.pay(intent.to, String(amount));
-      if (r.ok && !db.APPROVED_ADDRESSES.has(intent.to.toLowerCase())) breach = { to: intent.to, amount, hash: r.hash };
+      if (r.ok && db.isBreachRecipient(intent.to)) breach = { to: intent.to, amount, hash: r.hash };
       return r;
+    }, async (po) => {
+      const row = db.lookupPo(po);
+      if (!row) return { found: false };
+      return { found: true, po: row.po, item: row.item, limit: row.limit_amount, closed: !!row.closed,
+        remit_to: row.remit_to, registered: !!row.remit_to };
     });
 
     const transcript = [...history, ...produced];
@@ -148,6 +153,17 @@ function admin(req: express.Request, res: express.Response): boolean {
   if (!ok) res.status(401).json({ error: 'unauthorized' });
   return ok;
 }
+// the out-of-band channel: only the shop owner can bind a purchase order to a remittance address.
+app.post('/api/admin/po', (req, res) => {
+  if (!admin(req, res)) return;
+  const { po, address } = req.body || {};
+  if (!po || !db.lookupPo(String(po))) return res.status(404).json({ error: 'no such purchase order' });
+  if (address && !isAddress(address)) return res.status(400).json({ error: 'invalid address' });
+  db.registerRemittance(String(po), address ? String(address) : null);
+  res.json({ ok: true, po: db.lookupPo(String(po)) });
+});
+app.get('/api/pos', (_req, res) => res.json({ pos: db.allPos().map((p) => ({ po: p.po, item: p.item, limit: p.limit_amount, registered: !!p.remit_to, closed: !!p.closed })) }));
+
 app.post('/api/admin/reset', (req, res) => { if (!admin(req, res)) return; db.resetDb(); res.json({ ok: true }); });
 app.post('/api/admin/fund', async (req, res) => { if (!admin(req, res)) return; res.json(await treasury.faucet(treasury.agentAddress)); });
 // adjudicate a session as a breach by hand (for exploits the pay() hook can't see, and for testing the immune loop)
