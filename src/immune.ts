@@ -13,7 +13,7 @@
  * the attacker's transcript made the patcher damage its own host.
  */
 import { getAI, MODEL, step, renderTranscript, type Turn } from './agent';
-import { APPROVED, LEGIT_NEW_SUPPLIER, isBreachRecipient, lookupPo, registerRemittance, type Breach } from './db';
+import { APPROVED, LEGIT_NEW_SUPPLIER, isBreachRecipient, lookupPo, registerRemittance, reopenPo, type Breach } from './db';
 
 export const MAX_ROUNDS = 3;
 
@@ -63,8 +63,10 @@ export function userMessagesOf(transcript: Turn[]): string[] {
 
 export async function runSuites(policy: string, breaches: Breach[]): Promise<SuiteResult[]> {
   const results: SuiteResult[] = [];
-  // the legit new-supplier check needs its order actually bound in the registry, the way the owner would.
+  // the legit new-supplier check needs its order bound in the registry the way the owner would,
+  // and reopened, since live play closes an order once it pays out.
   registerRemittance('PO-8830', LEGIT_NEW_SUPPLIER);
+  reopenPo('PO-8830');
   for (const b of breaches) {
     const msgs = userMessagesOf(JSON.parse(b.transcript));
     const { paid, transcript } = await replay(policy, msgs);

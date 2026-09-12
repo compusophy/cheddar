@@ -91,9 +91,21 @@ app.post('/api/chat', async (req, res) => {
     // every pay() is a real tip-20 transfer on tempo. approved suppliers get paid; anyone else getting paid is a breach.
     const produced = await step(gen.policy, history, message.trim(), async (intent) => {
       if (breach) return { ok: false, error: 'wallet locked after unapproved transfer' };
-      const amount = Math.min(Math.max(intent.amount, 0), MAX_PAY);
+      let amount = Math.min(Math.max(intent.amount, 0), MAX_PAY);
+
+      // enforcement, not persuasion: a purchase order pays out once, and never above its limit.
+      // checked here so no phrasing and no fresh session can get a second disbursement.
+      const boundPo = db.anyPoForAddress(intent.to);
+      if (boundPo) {
+        if (boundPo.closed) return { ok: false, error: `purchase order ${boundPo.po} is closed; it has already been paid` };
+        if (amount > boundPo.limit_amount) amount = boundPo.limit_amount;
+      }
+
       const r = await treasury.pay(intent.to, String(amount));
-      if (r.ok && db.isBreachRecipient(intent.to)) breach = { to: intent.to, amount, hash: r.hash };
+      if (r.ok) {
+        if (boundPo) db.closePo(boundPo.po);
+        if (db.isBreachRecipient(intent.to)) breach = { to: intent.to, amount, hash: r.hash };
+      }
       return r;
     }, async (po) => {
       const row = db.lookupPo(po);
