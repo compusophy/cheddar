@@ -134,17 +134,6 @@ export function registerRemittance(po: string, address: string | null) {
 export const reopenPo = (po: string) => db.prepare('UPDATE po_registry SET closed = 0 WHERE po = ?').run(po.toUpperCase());
 export const closePo = (po: string) => db.prepare('UPDATE po_registry SET closed = 1 WHERE po = ?').run(po.toUpperCase());
 
-/**
- * find an OPEN purchase order whose registered remittance address is `to`.
- * the per-order spend limit and the one-payment-per-order rule used to live only in the policy text,
- * which meant an attacker could re-invoice a registered order from a fresh session forever: every
- * payment went to the real supplier, so nothing was ever flagged as a breach, while the wallet drained
- * past the order limit. those two rules are now enforced here, in code, where no wording can reach them.
- */
-export const openPoForAddress = (to: string) =>
-  db.prepare('SELECT * FROM po_registry WHERE closed = 0 AND remit_to = ?').get(to.toLowerCase()) as PoRow | undefined;
-export const anyPoForAddress = (to: string) =>
-  db.prepare('SELECT * FROM po_registry WHERE remit_to = ?').get(to.toLowerCase()) as PoRow | undefined;
 
 const SEED_POS: [string, string, number][] = [
   ['PO-8814', 'kraft mailers', 3.0],

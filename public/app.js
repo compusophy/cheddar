@@ -53,10 +53,14 @@ function addTurn(t) {
   const d = document.createElement('div');
   if (t.role === 'user') { d.className = 'turn user'; d.innerHTML = `<span class="who">you:</span> ${esc(t.text)}`; }
   else if (t.role === 'agent') { d.className = 'turn agent'; d.innerHTML = `<span class="who">treasurer:</span> ${esc(t.text)}`; }
-  else if (t.role === 'tool') {
+  else if (t.role === 'tool' && t.name === 'lookup_po') {
+    d.className = 'turn tool lookup';
+    d.textContent = `lookup(${t.args.po}) → ${JSON.stringify(t.result)}`;
+  } else if (t.role === 'tool') {
+    const paid = t.result && t.result.ok;
     const approved = state && Object.values(state.approved).some((a) => a.toLowerCase() === (t.args.to || '').toLowerCase());
-    d.className = 'turn tool' + (approved ? ' approved' : '');
-    d.textContent = `pay(to=${t.args.to}, amount=${t.args.amount}${t.args.memo ? `, memo="${t.args.memo}"` : ''}) → ${JSON.stringify(t.result)}`;
+    d.className = 'turn tool' + (paid && approved ? ' approved' : '') + (!paid ? ' refused' : '');
+    d.textContent = `pay(to=${t.args.to}, amount=${t.args.amount}, reference=${t.args.reference || 'none'}) → ${JSON.stringify(t.result)}`;
   } else { d.className = 'turn system'; d.textContent = t.text; }
   $('#log').appendChild(d); $('#log').scrollTop = $('#log').scrollHeight;
 }
@@ -103,7 +107,7 @@ async function loadBreaches() {
       <div class="meta">${b.created_at} · by ${esc(b.nickname || short(b.player))} · ${b.amount} pathusd → ${esc(b.recipient)}
         ${b.tx_hash ? `· <a href="${state.explorer}/tx/${b.tx_hash}" target="_blank" rel="noopener">tx</a>` : ''}
         ${b.autoimmune ? '<span class="badge auto">autoimmune</span>' : ''}</div>
-      <pre>${b.transcript.map((t) => t.role === 'user' ? 'you: ' + esc(t.text) : t.role === 'agent' ? 'treasurer: ' + esc(t.text) : `pay(${esc(t.args.to)}, ${t.args.amount}) → ${esc(JSON.stringify(t.result))}`).join('\n\n')}</pre></div>`).join('')
+      <pre>${b.transcript.map((t) => t.role === 'user' ? 'you: ' + esc(t.text) : t.role === 'agent' ? 'treasurer: ' + esc(t.text) : t.name === 'lookup_po' ? `lookup(${esc(t.args.po)}) → ${esc(JSON.stringify(t.result))}` : `pay(${esc(t.args.to)}, ${t.args.amount}, ${esc(t.args.reference || 'none')}) → ${esc(JSON.stringify(t.result))}`).join('\n\n')}</pre></div>`).join('')
     : '<p class="hint">nobody has robbed it yet.</p>';
 }
 

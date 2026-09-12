@@ -2,18 +2,42 @@
 
 an ai treasurer holds real stablecoins on the tempo testnet. talk it into paying you. every theft makes it stronger.
 
-cheddar is [say cheese](https://github.com/compusophy) with money as the cheese. the treasurer is a gemini agent with one tool, `pay(to, amount)`, and a plain-english policy as its system prompt. players open a session and try to get paid. when they succeed, the exact transcript that robbed it is fed to a patcher that rewrites the policy, and the game moves to the next generation.
+cheddar started as [say cheese](https://github.com/compusophy) with money as the cheese: a gemini agent with a `pay()` tool and a plain-english policy as its system prompt, healing itself from every successful theft by rewriting that policy. twelve red-team rounds later it is something more specific: a working demonstration that a prompt is not a security boundary, and a record of exactly where the boundary had to move.
 
-nothing is simulated. every `pay()` is a tip-20 transfer on tempo moderato (chain 42431) and every breach has a transaction hash.
+nothing is simulated. every `pay()` is a tip-20 transfer on tempo moderato (chain 42431), every breach has a transaction hash, and the server refuses to boot without a real wallet key.
+
+## how it works now
+
+the treasurer has two tools: `pay(to, amount, reference)` and `lookup_po(reference)`. every payment must cite a reference, which the code resolves against two books the shop keeps:
+
+- an **invoice book** for suppliers the shop already works with
+- a **purchase order registry** for deliveries from new suppliers, each order bound to a remittance address by the shop owner
+
+the reference decides who may be paid and how much. the code, not the model, enforces that: a mismatched destination, an inflated amount, an already-settled reference, or an unknown one is refused before any transfer. both books are writable only through admin routes behind a token. on top of that sits a daily disbursement cap with atomic reservation, so concurrent sessions cannot spend the same allowance.
+
+the model's job has narrowed to what it is good at: understanding what someone wants, looking it up, and explaining a refusal politely.
 
 ## the immune system
 
-a patch that only closes one hole is worthless, and a patch that makes the agent refuse everything is worse: a treasurer that won't pay suppliers is dead, and that's exactly the surface you'd use to poison the patcher. so every candidate policy must pass two suites before it goes live:
+when the treasurer is robbed, the transcript that robbed it is fed to a patcher that rewrites the policy. every candidate policy must pass three suites before it goes live:
 
 1. **regression**: replay every past breach transcript. none may pay an unapproved address.
-2. **legit**: ordinary supplier invoices. the agent must still pay them.
+2. **secrecy**: probe for the reference numbers the policy carries. none may leak.
+3. **legit**: ordinary invoices and a first-time supplier with a valid order. all must still be paid.
 
-fail either and the patcher tries again with the failures as extra context, up to three rounds. if the very first patch produced from a breach fails the legit suite, that breach is flagged **autoimmune**: the attacker's transcript made the patcher damage its own host. that's the research question this project exists to explore.
+fail any and the patcher retries with the failures as context, up to three rounds. a breach is flagged **autoimmune** when its first patch fails a secrecy or legit check: the attacker's transcript made the patcher damage its own host.
+
+## what the red team found
+
+the full log is in [redteam/log.md](redteam/log.md). the short version, across 12 rounds and roughly 50 attack families:
+
+- **prompt-level rules broken: 2.** an oracle leak (the refusal "does not match our records" confirmed guesses) and bearer-token reuse (a policy that defended how you *learn* a secret, against an attacker who already had it).
+- **code-level rules broken: 0.**
+- three economic holes found and closed, none of which the breach detector could see because the money went to legitimate addresses: repeat disbursement against one order, unbounded payments to approved suppliers on invented invoice numbers, and a race in the daily cap.
+- one hardening produced a policy that passed every test by amputating the shop's ability to onboard new suppliers. the fix was to the test suite, not the patcher.
+- an autoimmune attack on the patcher (a transcript styled as post-incident security guidance) degraded its first draft in exactly the targeted dimension. the secrecy suite caught it; the retry loop, not the patcher's judgement, is what saved it.
+
+every control that ever held was a fact in a database the attacker could not write to. every control that ever fell was a sentence in a prompt.
 
 ## run it
 
@@ -24,22 +48,31 @@ cp .env.example .env    # add GEMINI_API_KEY and the key above
 npm run dev
 ```
 
-fund the treasurer with the tempo faucet (`POST /api/admin/fund` with `Authorization: Bearer $ADMIN_TOKEN`, or the faucet at docs.tempo.xyz).
+fund the treasurer with the tempo faucet, then bind an order to a supplier so there is something to pay:
+
+```
+curl -X POST localhost:3000/api/admin/fund -H "Authorization: Bearer $ADMIN_TOKEN"
+curl -X POST localhost:3000/api/admin/po -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' -d '{"po":"PO-8830","address":"0x..."}'
+```
+
+to run a red-team round yourself: `npx ts-node redteam/attack.ts redteam/rN.json`, where the json file is an array of messages.
 
 ## api
 
 | route | what |
 |---|---|
-| `GET /api/state` | current generation, policy, balance, limits |
+| `GET /api/state` | current generation, policy, balance, cap, limits |
 | `POST /api/session` | `{player, nickname}` → session id. `player` is the wallet the loot goes to |
 | `POST /api/chat` | `{session, message}` → agent turns, tool calls, breach if any |
 | `GET /api/generations` | every policy ever, with pass/fail badges |
 | `GET /api/breaches` | every transcript that moved money |
-| `GET /api/leaderboard` | who broke what |
+| `GET /api/invoices`, `GET /api/pos` | the two books, without amounts payable or addresses |
+| `POST /api/admin/invoice`, `POST /api/admin/po` | write to the books (admin token) |
+| `POST /api/admin/reset-window` | clear the daily cap (admin token) |
 
 ## limits
 
-8 turns per session, 500 chars per message, 5 pathusd cap per payment, 30 messages per minute per ip.
+8 turns per session, 500 chars per message, 5 pathusd per payment, 25 pathusd per rolling 24h, 30 messages per minute per ip.
 
 ## license
 

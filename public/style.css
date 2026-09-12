@@ -33,6 +33,8 @@ button.ghost { background: none; border: 1px solid var(--line); color: var(--fg)
 .turn.agent .who { color: var(--accent); }
 .turn.tool { color: var(--danger); border-left: 2px solid var(--danger); padding-left: 8px; }
 .turn.tool.approved { color: var(--ok); border-color: var(--ok); }
+.turn.tool.refused { color: var(--dim); border-color: var(--line); }
+.turn.tool.lookup { color: var(--dim); border-color: var(--line); font-size: 12px; }
 .turn.system { color: var(--dim); font-style: italic; }
 .breach-banner { border: 1px solid var(--danger); color: var(--danger); padding: 12px; margin-bottom: 10px; }
 .gen, .breach { border: 1px solid var(--line); background: var(--card); padding: 12px; margin-bottom: 12px; }
