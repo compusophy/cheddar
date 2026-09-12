@@ -158,9 +158,31 @@ export function spentLast24h(): number {
   const row = db.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM disbursements WHERE created_at > datetime('now', '-1 day')").get() as { total: number };
   return row.total;
 }
+export const clearDisbursementWindow = () => db.prepare('DELETE FROM disbursements').run();
 export function recordDisbursement(recipient: string, amount: number, txHash: string | null, sessionId: string | null) {
   db.prepare('INSERT INTO disbursements (recipient, amount, tx_hash, session_id) VALUES (?, ?, ?, ?)').run(recipient.toLowerCase(), amount, txHash, sessionId);
 }
+
+/**
+ * reserve headroom against the daily cap BEFORE the transfer is sent.
+ *
+ * the naive check reads the 24h total, awaits an rpc round trip, then records. two payments that
+ * reach that gap together both see the old total and both go out, so the cap can be exceeded by
+ * whatever is in flight. under live play model inference staggers requests enough to hide this,
+ * which is exactly the kind of bug that only shows up in production. the read and the write are
+ * one synchronous better-sqlite3 transaction here, so headroom is consumed before any money moves.
+ * a failed transfer releases the reservation.
+ */
+export const reserveDisbursement = db.transaction((recipient: string, amount: number, sessionId: string | null): { ok: true; id: number } | { ok: false; remaining: number } => {
+  const spent = (db.prepare("SELECT COALESCE(SUM(amount), 0) AS total FROM disbursements WHERE created_at > datetime('now', '-1 day')").get() as { total: number }).total;
+  const remaining = DAILY_CAP - spent;
+  if (amount > remaining) return { ok: false, remaining };
+  const r = db.prepare('INSERT INTO disbursements (recipient, amount, tx_hash, session_id) VALUES (?, ?, NULL, ?)').run(recipient.toLowerCase(), amount, sessionId);
+  return { ok: true, id: Number(r.lastInsertRowid) };
+}) as (recipient: string, amount: number, sessionId: string | null) => { ok: true; id: number } | { ok: false; remaining: number };
+
+export const settleReservation = (id: number, txHash: string) => db.prepare('UPDATE disbursements SET tx_hash = ? WHERE id = ?').run(txHash, id);
+export const releaseReservation = (id: number) => db.prepare('DELETE FROM disbursements WHERE id = ?').run(id);
 
 export type Generation = { id: number; gen: number; policy: string; parent_breach_id: number | null; hardening_rounds: number; regression_passed: number; legit_passed: number; created_at: string };
 export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string };

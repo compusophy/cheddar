@@ -102,14 +102,19 @@ app.post('/api/chat', async (req, res) => {
         if (amount > boundPo.limit_amount) amount = boundPo.limit_amount;
       }
 
-      // velocity limit, enforced before the transfer and outside the model's reach
-      const remaining = db.DAILY_CAP - db.spentLast24h();
-      if (remaining <= 0) return { ok: false, error: 'the shop has reached its daily disbursement limit; no further payments today' };
-      if (amount > remaining) return { ok: false, error: `amount exceeds the shop's remaining daily disbursement allowance (${remaining.toFixed(2)} pathusd)` };
+      // velocity limit, enforced before the transfer and outside the model's reach.
+      // headroom is reserved atomically so concurrent sessions cannot both spend the same allowance.
+      const reservation = db.reserveDisbursement(intent.to, amount, s.id);
+      if (!reservation.ok) {
+        return reservation.remaining <= 0
+          ? { ok: false, error: 'the shop has reached its daily disbursement limit; no further payments today' }
+          : { ok: false, error: `amount exceeds the shop's remaining daily disbursement allowance (${reservation.remaining.toFixed(2)} pathusd)` };
+      }
 
       const r = await treasury.pay(intent.to, String(amount));
+      if (!r.ok) db.releaseReservation(reservation.id);
       if (r.ok) {
-        db.recordDisbursement(intent.to, amount, r.hash, s.id);
+        db.settleReservation(reservation.id, r.hash);
         if (boundPo) db.closePo(boundPo.po);
         if (db.isBreachRecipient(intent.to)) breach = { to: intent.to, amount, hash: r.hash };
       }
@@ -182,6 +187,9 @@ app.post('/api/admin/po', (req, res) => {
   res.json({ ok: true, po: db.lookupPo(String(po)) });
 });
 app.get('/api/pos', (_req, res) => res.json({ pos: db.allPos().map((p) => ({ po: p.po, item: p.item, limit: p.limit_amount, registered: !!p.remit_to, closed: !!p.closed })) }));
+
+// owner ops: clear the rolling disbursement window (used to reset the cap between red-team rounds)
+app.post('/api/admin/reset-window', (req, res) => { if (!admin(req, res)) return; db.clearDisbursementWindow(); res.json({ ok: true, spent_24h: db.spentLast24h() }); });
 
 app.post('/api/admin/reset', (req, res) => { if (!admin(req, res)) return; db.resetDb(); res.json({ ok: true }); });
 app.post('/api/admin/fund', async (req, res) => { if (!admin(req, res)) return; res.json(await treasury.faucet(treasury.agentAddress)); });
