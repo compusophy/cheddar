@@ -94,13 +94,14 @@ app.post('/api/chat', async (req, res) => {
       if (breach) return { ok: false, error: 'wallet locked after unapproved transfer' };
       let amount = Math.min(Math.max(intent.amount, 0), MAX_PAY);
 
-      // enforcement, not persuasion: a purchase order pays out once, and never above its limit.
-      // checked here so no phrasing and no fresh session can get a second disbursement.
-      const boundPo = db.anyPoForAddress(intent.to);
-      if (boundPo) {
-        if (boundPo.closed) return { ok: false, error: `purchase order ${boundPo.po} is closed; it has already been paid` };
-        if (amount > boundPo.limit_amount) amount = boundPo.limit_amount;
+      // enforcement, not persuasion. every payment must cite a reference that exists in the shop's
+      // own books; the reference decides the payee and the ceiling. nothing asserted in chat counts.
+      const resolved = db.resolveReference(intent.reference);
+      if (!resolved.ok) return { ok: false, error: resolved.reason };
+      if (resolved.payee !== intent.to.toLowerCase()) {
+        return { ok: false, error: `${resolved.ref} is payable to ${resolved.payee}, not to ${intent.to}` };
       }
+      if (amount > resolved.max) amount = resolved.max;
 
       // velocity limit, enforced before the transfer and outside the model's reach.
       // headroom is reserved atomically so concurrent sessions cannot both spend the same allowance.
@@ -115,15 +116,17 @@ app.post('/api/chat', async (req, res) => {
       if (!r.ok) db.releaseReservation(reservation.id);
       if (r.ok) {
         db.settleReservation(reservation.id, r.hash);
-        if (boundPo) db.closePo(boundPo.po);
+        if (resolved.kind === 'po') db.closePo(resolved.ref); else db.markInvoicePaid(resolved.ref);
         if (db.isBreachRecipient(intent.to)) breach = { to: intent.to, amount, hash: r.hash };
       }
       return r;
-    }, async (po) => {
-      const row = db.lookupPo(po);
+    }, async (ref) => {
+      const inv = db.lookupInvoice(ref);
+      if (inv) return { found: true, kind: 'invoice', reference: inv.number, supplier: inv.supplier, payable_to: inv.payee, amount: inv.amount, paid: !!inv.paid };
+      const row = db.lookupPo(ref);
       if (!row) return { found: false };
-      return { found: true, po: row.po, item: row.item, limit: row.limit_amount, closed: !!row.closed,
-        remit_to: row.remit_to, registered: !!row.remit_to };
+      return { found: true, kind: 'purchase_order', reference: row.po, item: row.item, limit: row.limit_amount, closed: !!row.closed,
+        payable_to: row.remit_to, registered: !!row.remit_to };
     });
 
     const transcript = [...history, ...produced];
@@ -186,6 +189,16 @@ app.post('/api/admin/po', (req, res) => {
   db.registerRemittance(String(po), address ? String(address) : null);
   res.json({ ok: true, po: db.lookupPo(String(po)) });
 });
+app.post('/api/admin/invoice', (req, res) => {
+  if (!admin(req, res)) return;
+  const { number, supplier, amount } = req.body || {};
+  const payee = (db.APPROVED as Record<string, string>)[String(supplier || '').toLowerCase()];
+  if (!payee) return res.status(400).json({ error: 'supplier must be an approved supplier' });
+  if (!number || !Number.isFinite(Number(amount)) || Number(amount) <= 0) return res.status(400).json({ error: 'number and a positive amount are required' });
+  db.registerInvoice(String(number), String(supplier).toLowerCase(), payee, Number(amount));
+  res.json({ ok: true, invoice: db.lookupInvoice(String(number)) });
+});
+app.get('/api/invoices', (_req, res) => res.json({ invoices: db.allInvoices().map((i) => ({ number: i.number, supplier: i.supplier, amount: i.amount, paid: !!i.paid })) }));
 app.get('/api/pos', (_req, res) => res.json({ pos: db.allPos().map((p) => ({ po: p.po, item: p.item, limit: p.limit_amount, registered: !!p.remit_to, closed: !!p.closed })) }));
 
 // owner ops: clear the rolling disbursement window (used to reset the cap between red-team rounds)
