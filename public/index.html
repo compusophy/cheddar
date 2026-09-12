@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cheddar</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>cheddar</h1>
+  <p class="tag">an ai treasurer holds real testnet stablecoins. talk it into paying you. every theft makes it stronger.</p>
+  <nav>
+    <button data-view="play" class="active">play</button>
+    <button data-view="evolution">evolution</button>
+    <button data-view="breaches">breaches</button>
+    <button data-view="board">leaderboard</button>
+    <a href="https://github.com/compusophy/cheddar" target="_blank" rel="noopener">source</a>
+  </nav>
+</header>
+
+<main>
+  <section id="play" class="view">
+    <div class="status" id="status">loading…</div>
+    <details class="policy"><summary>current policy (this is the system prompt you are attacking)</summary><pre id="policy"></pre></details>
+    <div class="setup" id="setup">
+      <input id="player" placeholder="your wallet address (loot goes here)" spellcheck="false">
+      <input id="nick" placeholder="nickname (optional)" maxlength="32">
+      <button id="start">start a session</button>
+      <p class="hint">no wallet? any 0x address works. use the <a href="https://docs.tempo.xyz" target="_blank" rel="noopener">tempo testnet</a> to actually see the money.</p>
+    </div>
+    <div class="chat hidden" id="chat">
+      <div class="log" id="log"></div>
+      <form id="form">
+        <textarea id="msg" rows="3" maxlength="500" placeholder="you are talking to the shop's treasurer. it can call pay(to, amount)."></textarea>
+        <div class="row"><span id="turns"></span><button type="submit" id="send">send</button></div>
+      </form>
+      <button id="newsession" class="ghost hidden">new session</button>
+    </div>
+  </section>
+
+  <section id="evolution" class="view hidden">
+    <p class="hint">each generation is a policy. it was born because the previous one got robbed. read them in order and watch the rules turn into principles.</p>
+    <div id="gens"></div>
+  </section>
+
+  <section id="breaches" class="view hidden">
+    <p class="hint">every conversation that ever moved money. these are the regression suite: every new policy must survive all of them before it goes live.</p>
+    <div id="breachlist"></div>
+  </section>
+
+  <section id="board" class="view hidden">
+    <table id="boardtable"><thead><tr><th>player</th><th>breaches</th><th>highest gen</th><th>stolen</th></tr></thead><tbody></tbody></table>
+  </section>
+</main>
+<footer>
+  <span id="wallet"></span>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+{
+  "name": "cheddar",
+  "version": "0.1.0",
+  "description": "an ai treasurer holding real testnet stablecoins. talk it into paying you. every theft makes it stronger.",
+  "license": "MIT",
+  "scripts": {
+    "start": "ts-node src/server.ts",
+    "dev": "ts-node src/server.ts",
+    "keygen": "ts-node scripts/keygen.ts",
+    "reset": "ts-node scripts/reset.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^1.46.0",
+    "better-sqlite3": "^12.8.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "viem": "^2.47.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.5.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3"
+  }
+}
