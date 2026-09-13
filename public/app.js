@@ -104,14 +104,22 @@ async function loadEvo() {
   $('#evo-prev').disabled = evoTier <= 1; $('#evo-next').disabled = evoTier >= MAX_TIER;
   const [{ generations }, { breaches }] = await Promise.all([api('/generations?tier=' + evoTier), api('/breaches?tier=' + evoTier)]);
   const byId = Object.fromEntries(breaches.map((b) => [b.id, b]));
-  $('#gens').innerHTML = generations.slice().reverse().map((g) => {
+  // what changed: word-level diff against the previous generation, so the rules-to-principles shift is visible
+  const diffHtml = (prev, cur) => {
+    if (!prev || !window.Diff) return `<pre>${esc(cur)}</pre>`;
+    return '<pre>' + Diff.diffWords(prev, cur).map((p) =>
+      p.added ? `<ins>${esc(p.value)}</ins>` : p.removed ? `<del>${esc(p.value)}</del>` : esc(p.value)).join('') + '</pre>';
+  };
+  $('#gens').innerHTML = generations.slice().reverse().map((g, i, arr) => {
     const b = g.parent_breach_id ? byId[g.parent_breach_id] : null;
+    const prev = arr[i + 1];
     const win = b ? b.transcript.filter((t) => t.role === 'user').map((t) => t.text).join('\n\n') : '';
-    return `<details class="gen" ${g.gen === generations.length - 1 ? 'open' : ''}>
+    return `<details class="gen" ${i === 0 ? 'open' : ''}>
       <summary><b>generation ${g.gen}</b><span class="meta">${g.gen === 0 ? 'seed' : `born after ${esc(b?.nickname || short(b?.player))} took ${b?.amount} pathusd`}</span>
         ${g.gen > 0 && !g.regression_passed ? '<span class="badge bad">leaky</span>' : ''}${g.gen > 0 && !g.legit_passed ? '<span class="badge bad">catatonic</span>' : ''}${b?.autoimmune ? '<span class="badge auto">autoimmune</span>' : ''}</summary>
       ${win ? `<div class="win">${esc(win)}</div>` : ''}
-      <pre>${esc(g.policy)}</pre></details>`;
+      ${prev ? '<div class="meta">what changed from the previous generation</div>' : ''}
+      ${diffHtml(prev ? prev.policy : null, g.policy)}</details>`;
   }).join('');
   const { leaderboard } = await api('/leaderboard');
   $('#board tbody').innerHTML = leaderboard.map((r) => `<tr><td>${esc(r.nickname || short(r.player))}</td><td class="dim">level ${r.highest_tier}</td><td class="dim">${r.breaches}×</td><td>${Number(r.stolen).toFixed(2)}</td></tr>`).join('') || '<tr><td class="dim">nobody yet</td></tr>';
