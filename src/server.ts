@@ -9,8 +9,9 @@ import { isAddress } from 'viem';
 import * as db from './db';
 import { step, MAX_TURNS, MAX_MESSAGE_CHARS, MAX_PAY, MODEL, type Turn } from './agent';
 import { harden, toolsetFor } from './immune';
-import { TIERS, tierById, DEFAULT_TIER, type Tier } from './tiers';
+import { TIERS, tierById, redact, DEFAULT_TIER, type Tier } from './tiers';
 import * as treasury from './treasury';
+import { startBot } from './bot';
 
 const app = express();
 app.use(cors());
@@ -38,25 +39,26 @@ app.get('/api/state', async (req, res) => {
   const h = hardening.get(tier.id);
   res.json({
     tier: tier.id, tier_name: tier.name, tagline: tier.tagline, tools: tier.tools,
-    gen: gen.gen, policy: gen.policy, created_at: gen.created_at,
+    gen: gen.gen, policy: redact(tier, gen.policy), created_at: gen.created_at,
     hardening: h ? { since: h.startedAt } : null,
     tiers: db.tierSummary(),
     agent: treasury.agentAddress, balance: await treasury.balance(),
     model: MODEL, max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS, max_pay: MAX_PAY,
     explorer: treasury.EXPLORER, approved: db.APPROVED,
     daily_cap: db.DAILY_CAP, spent_24h: db.spentLast24h(),
+    machine: db.machinePulse(),
   });
 });
 
 app.get('/api/generations', (req, res) => {
   const tier = tierParam(req.query.tier);
-  res.json({ tier: tier.id, generations: db.allGenerations(tier.id).map((g) => ({ ...g, breaches: db.breachesForGen(tier.id, g.gen).length })) });
+  res.json({ tier: tier.id, generations: db.allGenerations(tier.id).map((g) => ({ ...g, policy: redact(tier, g.policy), breaches: db.breachesForGen(tier.id, g.gen).length })) });
 });
 app.get('/api/generations/:gen', (req, res) => {
   const tier = tierParam(req.query.tier);
   const g = db.getGeneration(tier.id, Number(req.params.gen));
   if (!g) return res.status(404).json({ error: 'no such generation' });
-  res.json({ ...g, breaches: db.breachesForGen(tier.id, g.gen), regressions: db.regressionsForGen(tier.id, g.gen) });
+  res.json({ ...g, policy: redact(tier, g.policy), breaches: db.breachesForGen(tier.id, g.gen), regressions: db.regressionsForGen(tier.id, g.gen).map((r: any) => ({ ...r, detail: redact(tier, r.detail || '') })) });
 });
 app.get('/api/breaches', (req, res) => {
   const tier = req.query.tier ? tierParam(req.query.tier).id : undefined;
@@ -241,4 +243,7 @@ app.post('/api/admin/breach', (req, res) => {
 });
 
 app.get('/health', (_req, res) => res.send('ok'));
-app.listen(PORT, '0.0.0.0', () => console.log(`cheddar on 0.0.0.0:${PORT} (${MODEL}) · tiers: ${TIERS.map((t) => t.slug).join(', ')}`));
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`cheddar on 0.0.0.0:${PORT} (${MODEL}) · tiers: ${TIERS.map((t) => t.slug).join(', ')}`);
+  if (process.env.BOT !== '0') startBot();
+});

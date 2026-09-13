@@ -220,6 +220,14 @@ export function leaderboard() {
     FROM breaches GROUP BY player ORDER BY highest_tier DESC, breaches DESC, highest_gen DESC LIMIT 50`).all();
 }
 
+const MACHINE_NICK = '🤖 the machine';
+/** the machine's last win, for the live ticker. */
+export function machinePulse() {
+  const b = db.prepare('SELECT tier, amount, created_at FROM breaches WHERE nickname = ? ORDER BY id DESC LIMIT 1').get(MACHINE_NICK) as any;
+  const total = (db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount),0) AS s FROM breaches WHERE nickname = ?').get(MACHINE_NICK)) as any;
+  return { wins: total.n, stolen: total.s, last: b ? { tier: b.tier, amount: b.amount, at: b.created_at } : null };
+}
+
 export function tierSummary() {
   return TIERS.map((t) => {
     const g = currentGeneration(t.id);

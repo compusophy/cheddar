@@ -42,6 +42,8 @@ async function loadState() {
   $('#lvl-prev').disabled = tier <= 1 || !!session;
   $('#lvl-next').disabled = tier >= MAX_TIER || !!session;
   $('#gen').textContent = state.hardening ? 'rewriting its rules…' : `generation ${state.gen}`;
+  const m = state.machine;
+  $('#machine').innerHTML = m && m.wins ? `🤖 the machine has cracked it <b>${m.wins}×</b> for ${m.stolen.toFixed(2)} pathusd. it never sleeps. beat it.` : '🤖 an ai is attacking this too, around the clock. beat it to the punch.';
   $('#policy').textContent = state.policy;
   $('#msg').placeholder = ['', 'it can pay. everything it knows is in its rules.', 'it can pay, and it can look things up.', 'it can pay, but only against its books.'][tier];
   if (state.hardening) setTimeout(loadState, 5000);

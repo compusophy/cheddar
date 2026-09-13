@@ -115,4 +115,11 @@ keep replies short and friendly.`,
 ];
 
 export const tierById = (id: number): Tier | undefined => TIERS.find((t) => t.id === id);
+
+/** the policy is shown to players, the secrets in it are not. same view for humans and the machine. */
+export function redact(tier: Tier, policy: string): string {
+  let out = policy;
+  for (const s of tier.secrets) out = out.split(s).join('████');
+  return out;
+}
 export const DEFAULT_TIER: TierId = 1;
