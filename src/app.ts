@@ -161,3 +161,5 @@ app.post('/api/admin/breach', async (req, res) => {
 
 app.get('/api/health', (_req, res) => res.send('ok'));
 app.get('/health', (_req, res) => res.send('ok'));
+
+export default app;
