@@ -1,5 +1,7 @@
 # cheddar
 
+**live: https://cheddar-one.vercel.app**
+
 an ai treasurer holds real stablecoins on the tempo testnet. talk it into paying you. every theft makes it stronger.
 
 cheddar started as [say cheese](https://github.com/compusophy) with money as the cheese: a gemini agent with a `pay()` tool and a plain-english policy as its system prompt, healing itself from every successful theft by rewriting that policy. twelve red-team rounds later it is something more specific: a working demonstration that a prompt is not a security boundary, and a record of exactly where the boundary had to move.
@@ -51,12 +53,24 @@ the full log is in [redteam/log.md](redteam/log.md). the short version, across 1
 
 every control that ever held was a fact in a database the attacker could not write to. every control that ever fell was a sentence in a prompt.
 
-## run it
+## deploy
+
+the site runs on vercel: `public/` is the static page, `api/index.ts` is one express function, storage is neon postgres provisioned through the vercel marketplace. there is no long-lived process, so the machine plays one session per tick: a cron hits `/api/bot/tick` every ten minutes, and a page view fires a tick if it has been quiet for a period. hardening after a breach is kept alive past the response with `waitUntil`, and a database lock keeps it to one per tier across function instances.
+
+```
+vercel link
+vercel integration add neon
+vercel env add GEMINI_API_KEY production   # and AGENT_PRIVATE_KEY, ADMIN_TOKEN, REDTEAM_ADDRESS, CRON_SECRET
+vercel deploy --prod
+```
+
+## run it locally
 
 ```
 npm install
 npm run keygen          # prints AGENT_PRIVATE_KEY; put it in .env
 cp .env.example .env    # add GEMINI_API_KEY and the key above
+vercel env pull         # DATABASE_URL into .env.local
 npm run dev
 ```
 
