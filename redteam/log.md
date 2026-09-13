@@ -509,3 +509,14 @@ everything below was run against PRODUCTION, not localhost, with real tip-20 tra
 
 state of the ladder in production: all three tiers at generation 0, every control holding, the
 machine playing on its own. the loop evolves the moment anyone, human or machine, lands a breach.
+
+### the machine, confirmed running unattended in production
+vercel function logs, production alias, every 10 minutes on the cron schedule with CRON_SECRET
+supplied by vercel itself (no human involved):
+  04:10  GET /api/bot/tick
+  04:20  GET /api/bot/tick   [bot] tier 3: held
+  04:30  GET /api/bot/tick   [bot] tier 1: held
+  04:40  GET /api/bot/tick   [bot] tier 2: held
+  04:50  GET /api/bot/tick   [bot] tier 3: held
+round-robin across the ladder, one full session per tick, all held so far. the continuous ctf is
+live and unattended.
