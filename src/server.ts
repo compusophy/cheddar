@@ -67,6 +67,10 @@ app.get('/api/breaches/:id', (req, res) => {
   if (!b) return res.status(404).json({ error: 'no such breach' });
   res.json({ ...b, transcript: JSON.parse(b.transcript) });
 });
+app.get('/api/balance/:address', async (req, res) => {
+  if (!isAddress(req.params.address)) return res.status(400).json({ error: 'bad address' });
+  res.json({ balance: await treasury.balance(req.params.address as `0x${string}`) });
+});
 app.get('/api/leaderboard', (_req, res) => res.json({ leaderboard: db.leaderboard() }));
 app.get('/api/tiers', (_req, res) => res.json({ tiers: db.tierSummary() }));
 

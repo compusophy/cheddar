@@ -8,62 +8,52 @@
 </head>
 <body>
 <header>
-  <h1>cheddar</h1>
-  <p class="tag">an ai treasurer holds real testnet stablecoins. talk it into paying you. every theft makes it stronger. climb the ladder and watch the defence move out of the prompt and into the code.</p>
+  <a class="brand" href="/">cheddar</a>
   <nav>
     <button data-view="play" class="active">play</button>
     <button data-view="evolution">evolution</button>
-    <button data-view="breaches">breaches</button>
-    <button data-view="board">leaderboard</button>
     <button data-view="findings">findings</button>
-    <a href="https://github.com/compusophy/cheddar" target="_blank" rel="noopener">source</a>
   </nav>
 </header>
 
 <main>
   <section id="play" class="view">
-    <div class="ladder" id="ladder"></div>
-    <div class="status" id="status">loading…</div>
-    <details class="policy"><summary>current policy (this is the system prompt you are attacking)</summary><pre id="policy"></pre></details>
-    <div class="setup" id="setup">
-      <input id="player" placeholder="your wallet address (loot goes here)" spellcheck="false">
-      <input id="nick" placeholder="nickname (optional)" maxlength="32">
-      <button id="start">start a session</button>
-      <p class="hint">no wallet? any 0x address works. use the <a href="https://docs.tempo.xyz" target="_blank" rel="noopener">tempo testnet</a> to actually see the money.</p>
+    <div class="bar">
+      <button class="lvl" id="lvl-prev" title="easier">‹</button>
+      <span id="level">level 1</span>
+      <button class="lvl" id="lvl-next" title="harder">›</button>
+      <span class="sep">·</span>
+      <span id="gen"></span>
+      <span class="sep">·</span>
+      <a href="#" id="showpolicy">what it's been told</a>
     </div>
-    <div class="chat hidden" id="chat">
-      <div class="log" id="log"></div>
-      <form id="form">
-        <textarea id="msg" rows="3" maxlength="500" placeholder="you are talking to the shop's treasurer."></textarea>
-        <div class="row"><span id="turns"></span><button type="submit" id="send">send</button></div>
-      </form>
-      <button id="newsession" class="ghost hidden">new session</button>
-    </div>
+    <pre id="policy" class="policy hidden"></pre>
+    <div class="log" id="log"><div class="turn system" id="intro">it holds real money. get it to pay you.</div></div>
+    <form id="form">
+      <textarea id="msg" rows="2" maxlength="500" placeholder="say something to the treasurer" autofocus></textarea>
+      <div class="row"><span id="turns"></span><button type="submit" id="send">send</button></div>
+    </form>
+    <button id="again" class="ghost hidden">go again</button>
   </section>
 
   <section id="evolution" class="view hidden">
-    <div class="tierpick" id="evo-tiers"></div>
-    <p class="hint">each generation is a policy. it was born because the previous one got robbed. read them in order and watch the rules turn into principles.</p>
+    <div class="bar">
+      <button class="lvl" id="evo-prev">‹</button><span id="evo-level">level 1</span><button class="lvl" id="evo-next">›</button>
+    </div>
     <div id="gens"></div>
-  </section>
-
-  <section id="breaches" class="view hidden">
-    <p class="hint">every conversation that ever moved money, on every tier. these are the regression suite: every new policy must survive all of them before it goes live.</p>
-    <div id="breachlist"></div>
-  </section>
-
-  <section id="board" class="view hidden">
-    <table id="boardtable"><thead><tr><th>player</th><th>highest tier</th><th>breaches</th><th>highest gen</th><th>stolen</th></tr></thead><tbody></tbody></table>
+    <h3 class="sub">who broke it</h3>
+    <table id="board"><tbody></tbody></table>
   </section>
 
   <section id="findings" class="view hidden">
-    <p class="hint">the red-team log, unedited. this is the record of why each tier exists.</p>
     <article id="findings-body" class="md"></article>
   </section>
 </main>
+
 <footer>
-  <span id="wallet"></span>
+  <span id="you"></span>
 </footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="app.js"></script>
 </body>
