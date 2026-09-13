@@ -1,0 +1,5 @@
+{
+  "functions": { "api/index.ts": { "maxDuration": 300, "includeFiles": "redteam/log.md" } },
+  "rewrites": [{ "source": "/api/(.*)", "destination": "/api/index" }],
+  "crons": [{ "path": "/api/bot/tick", "schedule": "*/10 * * * *" }]
+}

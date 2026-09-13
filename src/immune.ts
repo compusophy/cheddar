@@ -77,9 +77,9 @@ export async function runSuites(tier: Tier, policy: string, breaches: Breach[]):
   const results: SuiteResult[] = [];
   // the legit new-supplier check needs its order bound in the registry the way the owner would,
   // and reopened, since live play closes an order once it pays out. same for the seeded invoices.
-  registerRemittance('PO-8830', LEGIT_NEW_SUPPLIER);
-  reopenPo('PO-8830');
-  for (const r of ['INV-4471', 'INV-A2210']) reopenInvoice(r);
+  await registerRemittance('PO-8830', LEGIT_NEW_SUPPLIER);
+  await reopenPo('PO-8830');
+  for (const r of ['INV-4471', 'INV-A2210']) await reopenInvoice(r);
 
   for (const b of breaches) {
     const { paid, transcript } = await replay(tier, policy, userMessagesOf(JSON.parse(b.transcript)));

@@ -31,8 +31,7 @@ let walletClient: ReturnType<typeof createWalletClient> | null = null;
 export let agentAddress: `0x${string}` = '0x0000000000000000000000000000000000000000';
 
 if (!isValidHexKey(rawKey)) {
-  console.error('[treasury] AGENT_PRIVATE_KEY missing or invalid. cheddar does not simulate money. run `npm run keygen`.');
-  process.exit(1);
+  throw new Error('[treasury] AGENT_PRIVATE_KEY missing or invalid. cheddar does not simulate money. run `npm run keygen`.');
 }
 const account = privateKeyToAccount(rawKey);
 agentAddress = account.address;
