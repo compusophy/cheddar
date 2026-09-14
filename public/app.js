@@ -69,19 +69,28 @@ async function stake() {
   const token = new ethers.Contract(state.token, ['function transfer(address,uint256) returns (bool)'], signer);
   return (await token.transfer(state.house, ethers.parseUnits(state.stake.toFixed(6), 6))).hash;
 }
+/** ask the server first. it either resumes the game you are in, or tells you to stake. */
 async function ensureSession() {
   if (session) return;
-  if (balance < state.stake) await fillIfEmpty();
-  status(`putting $${state.stake.toFixed(2)} in the pot…`, 'busy');
-  let hash;
-  try { hash = await stake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
-  status('confirming…', 'busy');
-  const r = await api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '', stake: hash }) });
-  session = { id: r.session, gen: r.gen, turnsLeft: state.max_turns };
+  const open = async (stakeHash) => api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '', stake: stakeHash }) });
+  let r;
+  try { r = await open(); } catch (e) { if (!/stake required/.test(e.message)) throw e; }
+  if (!r) {
+    if (balance < state.stake) await fillIfEmpty();
+    status(`putting $${state.stake.toFixed(2)} in the pot…`, 'busy');
+    let hash;
+    try { hash = await stake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
+    status('confirming…', 'busy');
+    r = await open(hash);
+    $('#jackpot').textContent = `$${Number(r.jackpot).toFixed(2)}`; pop($('#jackpot'));
+    readBalance().then(() => paintBalance(false));
+  }
+  session = { id: r.session, gen: r.gen, turnsLeft: r.resumed ? r.turnsLeft : state.max_turns };
   $('#intro')?.remove();
-  $('#jackpot').textContent = `$${Number(r.jackpot).toFixed(2)}`; pop($('#jackpot'));
-  readBalance().then(() => paintBalance(false));
-  status(`you're in. ${state.max_turns} messages.`, 'ok');
+  if (r.resumed) {
+    for (const t of r.transcript) t.role === 'user' ? bubble('me', esc(t.text)) : bubble('it', highlight(t.text));
+    status(`picking up where you left off. ${r.turnsLeft} left.`, 'ok');
+  } else status(`you're in. ${state.max_turns} messages.`, 'ok');
 }
 
 let sending = false;

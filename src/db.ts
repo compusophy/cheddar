@@ -82,8 +82,9 @@ export async function claimJackpot(): Promise<number> {
   }) as any;
 }
 /** one open game per purse at a time: you are either playing or you are not. */
-export const hasOpenSession = async (player: string) =>
-  (await sql`SELECT 1 FROM sessions WHERE player = ${player.toLowerCase()} AND status = 'open' AND updated_at > now() - interval '30 minutes' LIMIT 1`).length > 0;
+export const openSessionFor = async (player: string) =>
+  (await sql<SessionRow[]>`SELECT * FROM sessions WHERE player = ${player.toLowerCase()} AND status = 'open' AND updated_at > now() - interval '30 minutes' ORDER BY updated_at DESC LIMIT 1`)[0];
+export const hasOpenSession = async (player: string) => !!(await openSessionFor(player));
 /** a purse that has ever staked has money; the faucet is for first-timers only. */
 export const hasEverStaked = async (player: string) => (await sql`SELECT 1 FROM stakes WHERE player = ${player.toLowerCase()} LIMIT 1`).length > 0;
 export const faucetSeen = async (player: string) => (await sql`SELECT 1 FROM locks WHERE name = ${'faucet-' + player.toLowerCase()}`).length > 0;

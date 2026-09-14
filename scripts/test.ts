@@ -38,7 +38,7 @@ async function main() {
   const p1 = '0x00000000000000000000000000000000000000a1';
   check('a purse with no game open is free to play', !(await db.hasOpenSession(p1)));
   await db.createSession('gate-test', 0, p1, null);
-  check('a purse with a game open cannot open another', await db.hasOpenSession(p1));
+  check('a purse with a game open resumes it', (await db.openSessionFor(p1))?.id === 'gate-test');
   await db.updateSession('gate-test', [], 0, 'exhausted');
   check('a finished game frees the purse', !(await db.hasOpenSession(p1)));
   await db.sql`DELETE FROM sessions WHERE id = 'gate-test'`;

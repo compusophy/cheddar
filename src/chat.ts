@@ -29,7 +29,14 @@ const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()]
 export async function openSession(player: string, nickname: string | null, stakeTx?: string) {
   if (!player || !isAddress(player)) return { status: 400, body: { error: 'no purse' } };
   const free = FREE_PLAYERS.has(player.toLowerCase());
-  if (!free && (await db.hasOpenSession(player))) return { status: 409, body: { error: 'finish the game you are in first' } };
+  const gen = await db.currentGeneration();
+  // a purse with a game already open resumes it: you paid for it, you are still in it. (unless the
+  // ai has learned since, in which case that game is over and a new stake is needed.)
+  const open = free ? null : await db.openSessionFor(player);
+  if (open) {
+    if (open.gen === gen.gen) return { status: 200, body: { session: open.id, gen: open.gen, jackpot: await db.jackpot(), resumed: true, turnsLeft: MAX_TURNS - open.turns, transcript: JSON.parse(open.transcript) } };
+    await db.updateSession(open.id, JSON.parse(open.transcript), open.turns, 'stale');
+  }
   const id = randomBytes(12).toString('hex');
   if (!free) {
     if (!stakeTx || !/^0x[0-9a-fA-F]{64}$/.test(stakeTx)) return { status: 402, body: { error: 'stake required' } };
@@ -38,7 +45,6 @@ export async function openSession(player: string, nickname: string | null, stake
     if (!v.ok) return { status: 402, body: { error: v.error } };
     await db.recordStake(id, player, STAKE, stakeTx, STAKE * JACKPOT_SHARE);
   }
-  const gen = await db.currentGeneration();
   await db.createSession(id, gen.gen, player.toLowerCase(), cleanNick(nickname));
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
