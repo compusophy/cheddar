@@ -7,13 +7,13 @@
   the system. one font size, one line height, one row height, two spacings.
     --u   16px  padding of every box, gap between boxes
     --h    8px  gap between items inside a box
-    --row 48px  height of every bar, button, and input
+    --row 52px  one line of text with --u above and below: every bar, button, and input
   nothing else is allowed.
 */
 :root {
   --bg: #0a0a0a; --panel: #111111; --fg: #f0f0f0; --dim: #7a7a7a; --line: #262626;
   --gold: #ffcc33; --green: #34d399; --red: #ff5a6a;
-  --u: 16px; --h: 8px; --row: 48px;
+  --u: 16px; --h: 8px; --row: calc(var(--u) * 2 + 20px);  /* a row is one line of text with --u above and below */
 }
 * { box-sizing: border-box; border-radius: 0 !important; margin: 0; padding: 0; }
 html, body { height: 100%; background: var(--bg); color: var(--fg); }
@@ -36,7 +36,7 @@ header, .strip { display: flex; align-items: center; height: var(--row); padding
 header > * + *, .strip > * + * { margin-left: var(--u); }
 .tab { background: none; border: none; color: var(--dim); font-weight: 500; cursor: pointer; }
 .tab.active { color: var(--fg); }
-.purse { margin-left: auto !important; background: none; border: 1px solid var(--line); color: var(--green); font-weight: 600; height: calc(var(--row) - var(--u)); padding: 0 var(--u); cursor: pointer; }
+.purse { margin-left: auto !important; background: none; border: 1px solid var(--line); color: var(--green); font-weight: 600; height: calc(20px + var(--h) * 2); padding: 0 var(--u); cursor: pointer; }
 .purse.pop, .pot.pop { animation: pop .6s ease; }
 @keyframes pop { 40% { transform: scale(1.1); } }
 
@@ -81,13 +81,13 @@ header > * + *, .strip > * + * { margin-left: var(--u); }
 .claim input { flex: 1; min-width: 0; background: var(--bg); border: none; padding: 0 var(--u); }
 .claim button { padding: 0 var(--u); border: none; border-left: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 600; cursor: pointer; }
 
-.status { height: var(--row); line-height: var(--row); padding: 0 var(--u); color: var(--dim); text-align: center; border-top: 1px solid var(--line); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: none; }
+.status { height: var(--row); display: flex; align-items: center; justify-content: center; padding: 0 var(--u); color: var(--dim); text-align: center; border-top: 1px solid var(--line); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: none; }
 .status.busy { color: var(--gold); }
 .status.ok { color: var(--green); }
 .status.bad { color: var(--red); }
 
 .composer { display: flex; align-items: stretch; min-height: var(--row); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); flex: none; }
-textarea { flex: 1; min-width: 0; background: var(--bg); border: none; padding: calc((var(--row) - 20px) / 2) var(--u); resize: none; max-height: 120px; }
+textarea { flex: 1; min-width: 0; background: var(--bg); border: none; padding: var(--u); resize: none; max-height: 120px; }
 textarea::placeholder { color: var(--dim); }
 textarea:focus, input:focus, button:focus { outline: none; }
 #send { width: var(--row); border: none; border-left: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 700; cursor: pointer; flex: none; }
