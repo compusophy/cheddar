@@ -49,6 +49,15 @@ export async function openSession(player: string, nickname: string | null, stake
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 
+/** is this purse already in a game? a plain read, so the client never has to provoke an error to ask. */
+export async function peek(player: string) {
+  if (!player || !isAddress(player)) return { status: 400, body: { error: 'no purse' } };
+  const gen = await db.currentGeneration();
+  const open = await db.openSessionFor(player);
+  if (!open || open.gen !== gen.gen) return { status: 200, body: { session: null, gen: gen.gen } };
+  return { status: 200, body: { session: open.id, gen: open.gen, resumed: true, turnsLeft: MAX_TURNS - open.turns, transcript: JSON.parse(open.transcript) } };
+}
+
 export async function runChat(sessionId: string, message: string, onDelta?: (t: string) => void): Promise<ChatResult & { hardening?: Promise<void> }> {
   if (typeof message !== 'string' || !message.trim()) return { status: 400, body: { error: 'say something' } };
   if (message.length > MAX_MESSAGE_CHARS) return { status: 400, body: { error: `${MAX_MESSAGE_CHARS} characters max` } };

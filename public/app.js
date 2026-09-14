@@ -90,6 +90,7 @@ async function stake() {
   const token = new ethers.Contract(state.token, ['function transfer(address,uint256) returns (bool)'], signer);
   return (await token.transfer(state.house, ethers.parseUnits(state.stake.toFixed(6), 6))).hash;
 }
+const peek = () => api('/session?player=' + purse.address);
 const openSession = (stakeHash) => api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '', stake: stakeHash }) });
 function adopt(r) {
   session = { id: r.session, gen: r.gen, turnsLeft: r.resumed ? r.turnsLeft : state.max_turns };
@@ -102,9 +103,8 @@ function adopt(r) {
 /** ask the server first. it either resumes the game you are in, or tells you to stake. */
 async function ensureSession() {
   if (session) return;
-  let r;
-  try { r = await openSession(); } catch (e) { if (!/stake required/.test(e.message)) throw e; }
-  if (!r) {
+  let r = await peek();
+  if (!r.session) {
     if (balance < state.stake) await fillIfEmpty();
     status(`putting ${money(state.stake)} in the pot…`, 'busy');
     let hash;
@@ -118,7 +118,7 @@ async function ensureSession() {
 }
 /** on load: if there is a game open, the thread is waiting for you. */
 async function resumeIfOpen() {
-  try { const r = await openSession(); if (r?.resumed) adopt(r); } catch {}
+  try { const r = await peek(); if (r.session) adopt(r); } catch {}
 }
 
 /** the reply streams in over server-sent events; each token lands in the bubble as it arrives. */

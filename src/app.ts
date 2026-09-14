@@ -7,7 +7,7 @@ import { isAddress, verifyMessage } from 'viem';
 import * as db from './db';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED } from './game';
-import { openSession, runChat, resumeHardening } from './chat';
+import { openSession, runChat, peek, resumeHardening } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
 
@@ -59,6 +59,10 @@ app.get('/api/findings', (_req, res) => {
   res.type('text/markdown').send(fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '# nothing yet\n');
 });
 
+app.get('/api/session', async (req, res) => {
+  const r = await peek(String(req.query.player || ''));
+  res.status(r.status).json(r.body);
+});
 app.post('/api/session', async (req, res) => {
   const { player, nickname, stake } = req.body || {};
   const r = await openSession(player, nickname, stake);
