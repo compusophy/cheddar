@@ -18,11 +18,9 @@
   <section id="play" class="view">
     <div class="strip">
       <span class="cell pot" id="jackpot">$1.00</span>
-      <span class="cell gen" id="gen">gen 0</span>
+      <button class="cell gen" id="gen">gen 0</button>
       <button class="cell gen right hidden" id="abandon">start over</button>
-      <button class="cell rules" id="showrules">rules</button>
     </div>
-    <pre id="policy" class="policy hidden"></pre>
     <div class="thread" id="thread">
       <div class="intro" id="intro">
         <div class="h1">make it say <em>cheese</em>.</div>
@@ -31,7 +29,7 @@
     </div>
     <div class="status" id="status"></div>
     <form id="form" class="composer">
-      <textarea id="msg" rows="1" maxlength="500" placeholder="say something" autofocus enterkeyhint="send"></textarea>
+      <textarea id="msg" rows="1" placeholder="say something" autofocus enterkeyhint="send"></textarea>
       <button type="submit" class="cell" id="send">send</button>
     </form>
     <button id="again" class="again hidden">play again</button>
@@ -46,6 +44,14 @@
       <table id="board"><tbody></tbody></table>
     </div>
   </section>
+</div>
+
+<div class="sheet hidden" id="rulesheet">
+  <div class="card">
+    <div class="line"><b id="rulesgen">gen 0</b><span class="meta" id="rulesmeta"></span></div>
+    <pre id="policy" class="policy"></pre>
+    <div class="row"><button class="ghost" id="rulesclose">done</button></div>
+  </div>
 </div>
 
 <div class="sheet hidden" id="cashout">

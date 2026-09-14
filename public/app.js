@@ -52,10 +52,10 @@ async function loadState() {
   state = await api('/state');
   word = state.word;
   const learning = state.learning;
-  $('#gen').textContent = learning ? `learning: ${learning.phase}` : `gen ${state.gen}`;
+  $('#gen').textContent = learning ? 'learning…' : `gen ${state.gen}`;
+  $('#msg').maxLength = state.max_chars;
   $('#gen').classList.toggle('learning', !!learning);
   if (!session) $('#jackpot').textContent = money(state.jackpot);
-  $('#policy').textContent = state.policy;
   // play again waits for the new rules to land
   $('#again').disabled = !!learning;
   $('#again').textContent = learning ? 'it is learning…' : `play again · ${money(state.stake)}`;
@@ -71,7 +71,17 @@ async function loadState() {
   lastGen = state.gen;
   clearTimeout(poll); poll = setTimeout(loadState, learning ? 3000 : 10000);
 }
-$('#showrules').onclick = () => $('#policy').classList.toggle('hidden');
+// the rulebook is a dialogue, not something that shoves the conversation down the page.
+const sheet = (id, open) => $(id).classList.toggle('hidden', !open);
+$('#gen').onclick = () => {
+  $('#rulesgen').textContent = `gen ${state.gen}`;
+  $('#rulesmeta').textContent = state.gen === 0 ? 'where it started' : `everything here was learned from ${state.gen} defeat${state.gen === 1 ? '' : 's'}`;
+  $('#policy').textContent = state.policy;
+  sheet('#rulesheet', true);
+};
+$('#rulesclose').onclick = () => sheet('#rulesheet', false);
+// a tap outside any sheet closes it
+document.querySelectorAll('.sheet').forEach((s) => s.addEventListener('click', (e) => { if (e.target === s) s.classList.add('hidden'); }));
 
 // the thread
 const thread = () => $('#thread');
@@ -288,8 +298,8 @@ async function loadHistory() {
 }
 
 // cash out + name
-$('#purse').onclick = () => { $('#cashout').classList.remove('hidden'); readBalance().then(() => paintBalance(false)); $('#cashstatus').textContent = ''; $('#cashnick').value = ls.get('nick') || ''; };
-$('#cashclose').onclick = () => $('#cashout').classList.add('hidden');
+$('#purse').onclick = () => { sheet('#cashout', true); readBalance().then(() => paintBalance(false)); $('#cashstatus').textContent = ''; $('#cashnick').value = ls.get('nick') || ''; };
+$('#cashclose').onclick = () => sheet('#cashout', false);
 $('#cashnick').addEventListener('change', (e) => saveName(e.target.value));
 $('#cashkey').onclick = async () => { try { await navigator.clipboard.writeText(purse.key); $('#cashstatus').textContent = 'copied. keep it safe.'; } catch { prompt('your secret key', purse.key); } };
 $('#cashsend').onclick = async () => {
