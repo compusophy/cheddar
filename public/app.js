@@ -55,7 +55,6 @@ async function loadState() {
   $('#gen').textContent = learning ? `learning: ${learning.phase}` : `gen ${state.gen}`;
   $('#gen').classList.toggle('learning', !!learning);
   if (!session) $('#jackpot').textContent = money(state.jackpot);
-  $('#stakeamt').textContent = state.stake.toFixed(2);
   $('#policy').textContent = state.policy;
   // play again waits for the new rules to land
   $('#again').disabled = !!learning;
@@ -224,24 +223,6 @@ function end() { $('#form').classList.add('hidden'); $('#again').classList.remov
 $('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHTML = ''; $('#again').classList.add('hidden'); $('#form').classList.remove('hidden'); status(''); $('#msg').focus(); };
 
 // history: a ledger of defeats. each row is a generation, the line that killed it, and what it learned.
-/** the lesson, not the whole rulebook: only the changed words, with a little context around them. */
-function lesson(prev, cur) {
-  if (!prev || !window.Diff) return `<pre>${esc(cur)}</pre>`;
-  const parts = Diff.diffWords(prev, cur);
-  if (!parts.some((p) => p.added || p.removed)) return '<div class="note">it changed nothing</div>';
-  const isChange = (p) => p && (p.added || p.removed);
-  const html = parts.map((p, i) => {
-    if (p.added) return `<ins>${esc(p.value)}</ins>`;
-    if (p.removed) return `<del>${esc(p.value)}</del>`;
-    const before = isChange(parts[i - 1]), after = isChange(parts[i + 1]);
-    if (!before && !after) return ' … ';
-    const w = p.value.split(/\s+/).filter(Boolean);
-    if (w.length <= 14) return esc(p.value);
-    return (before ? esc(' ' + w.slice(0, 7).join(' ')) : '') + ' … ' + (after ? esc(w.slice(-7).join(' ') + ' ') : '');
-  }).join('').replace(/(\s*…\s*){2,}/g, ' … ').trim();
-  return `<pre>${html}</pre>`;
-}
-
 async function loadHistory() {
   const { generations, wins, board } = await api('/history');
   const byId = Object.fromEntries(wins.map((w) => [w.id, w]));
@@ -250,7 +231,7 @@ async function loadHistory() {
     `<span class="cell"><b>gen ${state?.gen ?? generations.length - 1}</b></span>`,
     `<span class="cell gen">${wins.length} win${wins.length === 1 ? '' : 's'}</span>`,
     `<span class="cell gen">${money(paid)} paid</span>`,
-    `<span class="cell gen" style="margin-left:auto">🤖 always playing</span>`,
+    `<span class="cell gen right">🤖 always playing</span>`,
   ].join('');
 
   $('#gens').innerHTML = generations.slice().reverse().map((g, i, arr) => {
@@ -270,8 +251,8 @@ async function loadHistory() {
       </summary>
       <div class="body">
         ${replay ? `<div class="replay">${replay}</div>` : ''}
-        <div class="learned">${prev ? 'what it learned' : 'the rules it started with'}</div>
-        ${prev ? lesson(prev.policy, g.policy) : `<pre>${esc(g.policy)}</pre>`}
+        ${g.lesson ? `<div class="learned">what it learned</div><div class="took">${esc(g.lesson)}</div>` : ''}
+        <details class="fold"><summary>${g.gen === 0 ? 'the rules it started with' : 'its new rules in full'}</summary><pre>${esc(g.policy)}</pre></details>
       </div>
     </details>`;
   }).join('');

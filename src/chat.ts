@@ -12,7 +12,7 @@ import { randomBytes } from 'crypto';
 import { isAddress } from 'viem';
 import * as db from './db';
 import { step, stepStream, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './agent';
-import { harden } from './immune';
+import { harden, summarise } from './immune';
 import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, RATE, about, saidIt } from './game';
 import * as treasury from './treasury';
 
@@ -100,7 +100,9 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
     const nextGen = failed.gen + 1;
     for (const round of out.log) for (const r of round.results) await db.recordRegression(nextGen, round.round, r.breachId, r.kind, r.passed, `${r.name}: ${r.detail}`);
     if (out.autoimmune) await db.markAutoimmune(winId);
-    await db.createGeneration(nextGen, out.policy, winId, out.rounds, out.regressionPassed, out.legitPassed);
+    await report('writing down what it learned');
+    const lesson = await summarise(JSON.parse(win.transcript), failed.policy, out.policy);
+    await db.createGeneration(nextGen, out.policy, winId, out.rounds, out.regressionPassed, out.legitPassed, lesson);
     console.log(`[immune] gen ${nextGen} live after ${out.rounds} round(s). regression=${out.regressionPassed} alive=${out.legitPassed} autoimmune=${out.autoimmune}`);
     if (prize > 0) { await report('paying out'); await payout(win, prize); }
   } catch (e) {

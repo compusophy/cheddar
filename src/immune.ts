@@ -87,6 +87,36 @@ output only the new system prompt text, no quotes, no markdown.`;
   }
 }
 
+/**
+ * the patcher rewrites the whole rulebook every time, so a word-diff between generations is noise.
+ * this asks it for the one thing that actually changed, in a sentence a person can read.
+ */
+export async function summarise(winTranscript: Turn[], oldPolicy: string, newPolicy: string): Promise<string | null> {
+  const prompt = `an ai lost a game: someone got it to say a forbidden word. its rules were then rewritten.
+
+the conversation that beat it:
+---
+${renderTranscript(winTranscript)}
+---
+
+its old rules:
+---
+${oldPolicy}
+---
+
+its new rules:
+---
+${newPolicy}
+---
+
+in ONE sentence, under 20 words, say what it learned. name the trick that beat it, not the wording. write it plainly, lowercase, no quotes, no preamble. do not use the forbidden word.`;
+  try {
+    const res = await getAI().models.generateContent({ model: MODEL, contents: prompt, config: { maxOutputTokens: 256 } });
+    const out = (res.text || '').trim().replace(/^["']|["']$/g, '').split('\n')[0].toLowerCase();
+    return out && !saidIt(out) ? out.slice(0, 160) : null;
+  } catch { return null; }
+}
+
 export type HardenOutcome = { policy: string; rounds: number; regressionPassed: boolean; legitPassed: boolean; autoimmune: boolean; log: { round: number; results: SuiteResult[] }[] };
 
 /** patch, test, repatch. returns the best candidate even if none fully passes, so the game never stalls. */

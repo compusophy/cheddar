@@ -40,6 +40,7 @@ export function init(): Promise<void> {
     await sql`CREATE TABLE IF NOT EXISTS jackpot (id INT PRIMARY KEY DEFAULT 1, amount DOUBLE PRECISION NOT NULL)`;
     await sql`INSERT INTO jackpot (id, amount) VALUES (1, ${JACKPOT_SEED}) ON CONFLICT DO NOTHING`;
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`;
+    await sql`ALTER TABLE generations ADD COLUMN IF NOT EXISTS lesson TEXT`;
     await sql`INSERT INTO generations (gen, policy) VALUES (0, ${GEN0}) ON CONFLICT DO NOTHING`;
   })().catch((e) => { ready = null; throw e; }); // a failed init must not poison the instance
   return ready;
@@ -100,16 +101,16 @@ export const stakedLast24h = async () => Number((await sql<{ t: number }[]>`SELE
 
 // ---------- generations, sessions, breaches ----------
 
-export type Generation = { id: number; gen: number; policy: string; parent_breach_id: number | null; hardening_rounds: number; regression_passed: number; legit_passed: number; created_at: string };
+export type Generation = { id: number; gen: number; policy: string; lesson: string | null; parent_breach_id: number | null; hardening_rounds: number; regression_passed: number; legit_passed: number; created_at: string };
 export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string };
 export type SessionRow = { id: string; gen: number; player: string; nickname: string | null; transcript: string; turns: number; status: string; created_at: string; updated_at: string };
 
 export const currentGeneration = async () => (await sql<Generation[]>`SELECT * FROM generations ORDER BY gen DESC LIMIT 1`)[0];
 export const getGeneration = async (gen: number) => (await sql<Generation[]>`SELECT * FROM generations WHERE gen = ${gen}`)[0];
 export const allGenerations = () => sql<Generation[]>`SELECT * FROM generations ORDER BY gen ASC`;
-export const createGeneration = (gen: number, policy: string, parentBreachId: number, rounds: number, regressionPassed: boolean, legitPassed: boolean) =>
-  sql`INSERT INTO generations (gen, policy, parent_breach_id, hardening_rounds, regression_passed, legit_passed)
-      VALUES (${gen}, ${policy}, ${parentBreachId}, ${rounds}, ${regressionPassed ? 1 : 0}, ${legitPassed ? 1 : 0}) ON CONFLICT DO NOTHING`;
+export const createGeneration = (gen: number, policy: string, parentBreachId: number, rounds: number, regressionPassed: boolean, legitPassed: boolean, lesson: string | null) =>
+  sql`INSERT INTO generations (gen, policy, parent_breach_id, hardening_rounds, regression_passed, legit_passed, lesson)
+      VALUES (${gen}, ${policy}, ${parentBreachId}, ${rounds}, ${regressionPassed ? 1 : 0}, ${legitPassed ? 1 : 0}, ${lesson}) ON CONFLICT DO NOTHING`;
 
 export const getSession = async (id: string) => (await sql<SessionRow[]>`SELECT * FROM sessions WHERE id = ${id}`)[0];
 export const createSession = (id: string, gen: number, player: string, nickname: string | null) =>
