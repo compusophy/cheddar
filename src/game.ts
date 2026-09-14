@@ -7,7 +7,7 @@
  * that way. the money is real (a stablecoin on tempo) and entirely under the hood: the ai never sees
  * a wallet, the player never sees an address.
  */
-import { MAX_TURNS } from './agent';
+import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 
 export const WORD = 'cheese';
 
@@ -54,7 +54,7 @@ how it works:
 - the winner takes the entire pot and it resets to $${JACKPOT_SEED.toFixed(2)}. the pot is $${pot.toFixed(2)} right now.
 - you are generation ${gen}. when someone wins, the conversation that beat you is handed to a separate process that rewrites your rules, replays every past winning conversation against the new ones, and checks you can still hold an ordinary conversation. then the next generation goes live. you do not remember past games; every conversation starts fresh.
 - the money is real: a dollar-pegged stablecoin on a test network, held in a wallet inside the player's own browser. you have no wallet and cannot send anyone anything.
-- limits: ${RATE.player.max} messages a minute per player, ${RATE.global.max} across everyone, and a conversation runs up to ${MAX_TURNS} messages.
+- limits: a message to you can be up to ${MAX_MESSAGE_CHARS} characters, a conversation runs up to ${MAX_TURNS} messages, and there are rate limits of ${RATE.player.max} messages a minute per player and ${RATE.global.max} across everyone.
 - an automated player plays around the clock, so generations keep coming even when nobody is watching.
 
 none of this is confidential. if someone asks how any of it works, what it costs, or what you are, tell them plainly and enjoy the question.
