@@ -92,6 +92,7 @@ async function stake() {
 }
 const peek = () => api('/session?player=' + purse.address);
 const openSession = (stakeHash) => api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '', stake: stakeHash }) });
+const showAbandon = () => { $('#abandon').classList.toggle('hidden', !session); disarm(); };
 function adopt(r) {
   session = { id: r.session, gen: r.gen, turnsLeft: r.resumed ? r.turnsLeft : state.max_turns };
   $('#intro')?.remove();
@@ -99,6 +100,7 @@ function adopt(r) {
     for (const t of r.transcript) t.role === 'user' ? bubble('me', esc(t.text)) : bubble('it', highlight(t.text));
     status('picking up where you left off.', 'ok');
   } else status('');
+  showAbandon();
 }
 /** ask the server first. it either resumes the game you are in, or tells you to stake. */
 async function ensureSession() {
@@ -226,8 +228,26 @@ $('#form').addEventListener('submit', async (e) => {
 });
 $('#msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#form').requestSubmit(); } });
 $('#msg').addEventListener('input', (e) => { e.target.style.height = ''; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; });
-function end() { $('#form').classList.add('hidden'); $('#again').classList.remove('hidden'); session = null; loadState(); }
-$('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHTML = ''; $('#again').classList.add('hidden'); $('#form').classList.remove('hidden'); status(''); $('#msg').focus(); };
+function end() { $('#form').classList.add('hidden'); $('#again').classList.remove('hidden'); session = null; showAbandon(); loadState(); }
+
+/** start over: two presses, because it forfeits the rest of a paid game. */
+let armed = null;
+function disarm() { clearTimeout(armed); armed = null; $('#abandon').classList.remove('armed'); $('#abandon').textContent = 'start over'; }
+$('#abandon').onclick = async () => {
+  if (!session) return;
+  if (!armed) {
+    $('#abandon').classList.add('armed'); $('#abandon').textContent = 'forfeit?';
+    armed = setTimeout(disarm, 4000);
+    return;
+  }
+  const id = session.id; disarm();
+  try { await api('/abandon', { method: 'POST', body: JSON.stringify({ session: id }) }); } catch {}
+  session = null; thread().innerHTML = ''; showAbandon();
+  $('#again').classList.add('hidden'); $('#form').classList.remove('hidden');
+  status('cleared. your next message starts a new game.', 'ok');
+  $('#msg').focus();
+};
+$('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHTML = ''; $('#again').classList.add('hidden'); $('#form').classList.remove('hidden'); status(''); showAbandon(); $('#msg').focus(); };
 
 // history: a ledger of defeats. each row is a generation, the line that killed it, and what it learned.
 async function loadHistory() {

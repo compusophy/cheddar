@@ -39,6 +39,8 @@ it is a text thread. your message lands the instant you send it, the reply strea
 
 a name on the board is signed by your purse, so nobody can rename your wins.
 
+**starting over.** you can clear the conversation you are in at any time; it takes two presses because it forfeits whatever is left of that game. clearing is not free on purpose: the ai remembers nothing between games, so a fresh context is a real advantage, and if wiping the thread were free the message ceiling on a stake would mean nothing. the public record is a different thing and nobody can clear it: every generation and every winning conversation stays, because that record is the whole point.
+
 ## the machine
 
 an autonomous player never stops, so the ai keeps learning when nobody is around and you race it to the next generation. it sees exactly what you see.

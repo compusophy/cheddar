@@ -53,6 +53,7 @@ button.cell:active { background: var(--fg); color: var(--bg); }
 .gen.learning { color: var(--gold); animation: breathe 1.4s ease-in-out infinite; }
 @keyframes breathe { 50% { opacity: .4; } }
 .rules { margin-left: auto; color: var(--dim); }
+#abandon.armed { background: var(--red); color: #000; }
 .rules:hover { color: var(--fg); }
 .policy { padding: var(--u); border-bottom: 1px solid var(--line); background: var(--panel); color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto; flex: none; }
 

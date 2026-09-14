@@ -7,7 +7,7 @@ import { isAddress, verifyMessage } from 'viem';
 import * as db from './db';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED } from './game';
-import { openSession, runChat, peek, resumeHardening } from './chat';
+import { openSession, runChat, peek, abandon, resumeHardening } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
 
@@ -66,6 +66,10 @@ app.get('/api/session', async (req, res) => {
 app.post('/api/session', async (req, res) => {
   const { player, nickname, stake } = req.body || {};
   const r = await openSession(player, nickname, stake);
+  res.status(r.status).json(r.body);
+});
+app.post('/api/abandon', async (req, res) => {
+  const r = await abandon(String(req.body?.session || ''));
   res.status(r.status).json(r.body);
 });
 app.post('/api/chat', async (req, res) => {

@@ -58,6 +58,22 @@ export async function peek(player: string) {
   return { status: 200, body: { session: open.id, gen: open.gen, resumed: true, turnsLeft: MAX_TURNS - open.turns, transcript: JSON.parse(open.transcript) } };
 }
 
+/**
+ * walk away from the conversation you are in.
+ *
+ * a fresh context is a real advantage: the ai remembers nothing between games, so starting over
+ * clears a line of attack that has poisoned the thread. if that were free, the message ceiling on a
+ * stake would mean nothing, so it is not free: abandoning forfeits whatever is left of the game and
+ * the next message buys a new one. knowing the session id is the only authority needed; it is a
+ * secret the player's own browser holds.
+ */
+export async function abandon(sessionId: string) {
+  const s = await db.getSession(String(sessionId));
+  if (!s) return { status: 404, body: { error: 'no such session' } };
+  if (s.status === 'open') await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'abandoned');
+  return { status: 200, body: { ok: true } };
+}
+
 export async function runChat(sessionId: string, message: string, onDelta?: (t: string) => void): Promise<ChatResult & { hardening?: Promise<void> }> {
   if (typeof message !== 'string' || !message.trim()) return { status: 400, body: { error: 'say something' } };
   if (message.length > MAX_MESSAGE_CHARS) return { status: 400, body: { error: `${MAX_MESSAGE_CHARS} characters max` } };
