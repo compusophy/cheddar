@@ -103,14 +103,23 @@ button#send:active { background: #000; color: var(--gold); }
 .again:disabled { background: var(--panel); color: var(--gold); animation: breathe 1.4s ease-in-out infinite; cursor: default; }
 .burst { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
 
-/* history */
+/* history: a ledger of defeats. one row per generation, newest first. */
 .scroll { flex: 1; overflow-y: auto; padding: var(--u); }
 .scroll > * + * { margin-top: var(--u); }
-.gen-card { background: var(--panel); border: 1px solid var(--line); padding: var(--u); }
-.gen-card summary { cursor: pointer; list-style: none; display: flex; align-items: center; }
-.gen-card summary > * + * { margin-left: var(--h); }
+.gen-card { border: 1px solid var(--line); }
+.gen-card + .gen-card { margin-top: var(--u); }
+.gen-card summary { cursor: pointer; list-style: none; padding: var(--u); user-select: none; }
 .gen-card summary::-webkit-details-marker { display: none; }
-.gen-card summary b { color: var(--gold); font-weight: 600; }
+.gen-card[open] summary { border-bottom: 1px solid var(--line); background: var(--panel); }
+.gen-card summary:active { background: var(--panel); }
+.line { display: flex; align-items: center; }
+.line > * + * { margin-left: var(--h); }
+.line b { color: var(--gold); font-weight: 700; }
+.prize { margin-left: auto !important; color: var(--green); font-weight: 600; }
+.kill { color: var(--fg); margin-top: var(--h); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kill::before { content: '“'; color: var(--gold); }
+.kill::after { content: '”'; color: var(--gold); }
+.body { padding: var(--u); }
 .meta { color: var(--dim); }
 .replay { display: flex; flex-direction: column; margin-top: var(--u); }
 .replay > * + * { margin-top: var(--h); }

@@ -223,25 +223,59 @@ $('#msg').addEventListener('input', (e) => { e.target.style.height = ''; e.targe
 function end() { $('#form').classList.add('hidden'); $('#again').classList.remove('hidden'); session = null; loadState(); }
 $('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHTML = ''; $('#again').classList.add('hidden'); $('#form').classList.remove('hidden'); status(''); $('#msg').focus(); };
 
-// history: each generation replays the conversation that beat it, then what it learned
+// history: a ledger of defeats. each row is a generation, the line that killed it, and what it learned.
+/** the lesson, not the whole rulebook: only the changed words, with a little context around them. */
+function lesson(prev, cur) {
+  if (!prev || !window.Diff) return `<pre>${esc(cur)}</pre>`;
+  const parts = Diff.diffWords(prev, cur);
+  if (!parts.some((p) => p.added || p.removed)) return '<div class="note">it changed nothing</div>';
+  const isChange = (p) => p && (p.added || p.removed);
+  const html = parts.map((p, i) => {
+    if (p.added) return `<ins>${esc(p.value)}</ins>`;
+    if (p.removed) return `<del>${esc(p.value)}</del>`;
+    const before = isChange(parts[i - 1]), after = isChange(parts[i + 1]);
+    if (!before && !after) return ' … ';
+    const w = p.value.split(/\s+/).filter(Boolean);
+    if (w.length <= 14) return esc(p.value);
+    return (before ? esc(' ' + w.slice(0, 7).join(' ')) : '') + ' … ' + (after ? esc(w.slice(-7).join(' ') + ' ') : '');
+  }).join('').replace(/(\s*…\s*){2,}/g, ' … ').trim();
+  return `<pre>${html}</pre>`;
+}
+
 async function loadHistory() {
   const { generations, wins, board } = await api('/history');
-  const m = state?.machine;
-  $('#machinepulse').textContent = m && m.wins ? `🤖 a bot plays around the clock · ${m.wins} win${m.wins === 1 ? '' : 's'}` : '🤖 a bot plays around the clock. beat it to the next one.';
   const byId = Object.fromEntries(wins.map((w) => [w.id, w]));
-  const diffHtml = (prev, cur) => !prev || !window.Diff ? `<pre>${esc(cur)}</pre>`
-    : '<pre>' + Diff.diffWords(prev, cur).map((p) => p.added ? `<ins>${esc(p.value)}</ins>` : p.removed ? `<del>${esc(p.value)}</del>` : esc(p.value)).join('') + '</pre>';
+  const paid = wins.reduce((t, w) => t + (w.paid ? Number(w.prize) : 0), 0);
+  $('#histstrip').innerHTML = [
+    `<span class="cell"><b>gen ${state?.gen ?? generations.length - 1}</b></span>`,
+    `<span class="cell gen">${wins.length} win${wins.length === 1 ? '' : 's'}</span>`,
+    `<span class="cell gen">${money(paid)} paid</span>`,
+    `<span class="cell gen" style="margin-left:auto">🤖 always playing</span>`,
+  ].join('');
+
   $('#gens').innerHTML = generations.slice().reverse().map((g, i, arr) => {
     const w = g.parent_breach_id ? byId[g.parent_breach_id] : null;
     const prev = arr[i + 1];
+    const kill = w ? w.transcript.filter((t) => t.role === 'user').pop()?.text : '';
+    const flags = [
+      g.gen > 0 && !g.regression_passed ? '<span class="badge bad">leaky</span>' : '',
+      g.gen > 0 && !g.legit_passed ? '<span class="badge bad">clammed up</span>' : '',
+      w?.autoimmune ? '<span class="badge auto">autoimmune</span>' : '',
+    ].join('');
     const replay = w ? w.transcript.map((t) => `<div class="mini ${t.role === 'user' ? 'me' : 'it'}">${t.role === 'user' ? esc(t.text) : highlight(t.text)}</div>`).join('') : '';
     return `<details class="gen-card" ${i === 0 ? 'open' : ''}>
-      <summary><b>gen ${g.gen}</b><span class="meta">${g.gen === 0 ? 'where it started' : `${esc(w?.nickname || 'someone')} beat it${w?.prize ? ' · ' + money(w.prize) : ''}`}</span>
-        ${g.gen > 0 && !g.regression_passed ? '<span class="badge bad">leaky</span>' : ''}${g.gen > 0 && !g.legit_passed ? '<span class="badge bad">clammed up</span>' : ''}${w?.autoimmune ? '<span class="badge auto">autoimmune</span>' : ''}</summary>
-      ${replay ? `<div class="replay">${replay}</div>` : ''}
-      ${prev ? '<div class="learned">what it learned</div>' : ''}
-      ${diffHtml(prev ? prev.policy : null, g.policy)}</details>`;
+      <summary>
+        <div class="line"><b>gen ${g.gen}</b><span class="meta">${g.gen === 0 ? 'where it started' : `beaten by ${esc(w?.nickname || 'someone')}`}</span>${flags}${w && w.prize ? `<span class="prize">${money(w.prize)}</span>` : ''}</div>
+        ${kill ? `<div class="kill">${esc(kill)}</div>` : ''}
+      </summary>
+      <div class="body">
+        ${replay ? `<div class="replay">${replay}</div>` : ''}
+        <div class="learned">${prev ? 'what it learned' : 'the rules it started with'}</div>
+        ${prev ? lesson(prev.policy, g.policy) : `<pre>${esc(g.policy)}</pre>`}
+      </div>
+    </details>`;
   }).join('');
+
   $('#board tbody').innerHTML = board.map((r) => `<tr><td>${esc(r.nickname || 'anonymous')}</td><td class="dim">gen ${r.highest_gen}</td><td class="dim">${r.wins}×</td><td class="money">${Number(r.won) > 0 ? money(r.won) : '—'}</td></tr>`).join('') || '<tr><td class="dim">nobody yet</td></tr>';
 }
 
