@@ -2,63 +2,62 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0a">
 <title>say cheese</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="grid"></div>
-<header>
-  <a class="brand" href="/">say <span>cheese</span></a>
-  <nav>
-    <button data-view="play" class="active">play</button>
-    <button data-view="history">history</button>
-  </nav>
-  <div class="purse" id="purse" title="your winnings"><span id="bal">$0.00</span></div>
-</header>
+<div class="app">
+  <header>
+    <button class="tab active" data-view="play">say <em>cheese</em></button>
+    <button class="tab" data-view="history">history</button>
+    <button class="purse" id="purse" title="your winnings"><span id="bal">$0.00</span></button>
+  </header>
 
-<main>
   <section id="play" class="view">
-    <div class="hud">
-      <span class="pill jackpot" id="jackpot" title="the pot. winner takes it all.">pot $0.00</span>
-      <span class="pill" id="gen">gen 0</span>
-      <span class="pill dim" id="turns"></span>
-      <a href="#" class="pill ghost" id="showrules">its rules</a>
+    <div class="strip">
+      <span class="pot" id="jackpot">$1.00</span>
+      <span class="gen" id="gen">gen 0</span>
+      <button class="rules" id="showrules">rules</button>
     </div>
     <pre id="policy" class="policy hidden"></pre>
-    <div class="log" id="log">
+    <div class="thread" id="thread">
       <div class="intro" id="intro">
-        <div class="big">make it say <em>cheese</em>.</div>
-        <div class="small">it has been told not to. every time someone wins, it learns why.<br><span id="stakeline"></span></div>
+        <div class="h1">make it say <em>cheese</em>.</div>
+        <div class="h2">it's been told not to. win the pot. it learns.</div>
       </div>
     </div>
-    <form id="form">
-      <textarea id="msg" rows="1" maxlength="500" placeholder="say something" autofocus></textarea>
-      <button type="submit" id="send" aria-label="send">↵</button>
+    <div class="status" id="status"></div>
+    <form id="form" class="composer">
+      <textarea id="msg" rows="1" maxlength="500" placeholder="message" autofocus enterkeyhint="send"></textarea>
+      <button type="submit" id="send" aria-label="send">↑</button>
     </form>
-    <button id="again" class="ghost hidden">again</button>
+    <button id="again" class="again hidden">play again · $<span id="stakeamt">0.25</span></button>
   </section>
 
   <section id="history" class="view hidden">
-    <div class="hud"><span class="pill dim" id="machinepulse"></span></div>
-    <div id="gens"></div>
-    <h3 class="sub">winners</h3>
-    <table id="board"><tbody></tbody></table>
-  </section>
-</main>
-
-<div class="modal hidden" id="cashout">
-  <div class="card">
-    <div class="big">your winnings</div>
-    <div class="huge" id="cashbal">$0.00</div>
-    <p class="small">this is real money and it lives in this browser. every game costs a small stake from it; most of the stake goes into the pot. paste in an address to send it somewhere, or copy your secret key to move the whole thing.</p>
-    <input id="cashto" placeholder="send to…" spellcheck="false">
-    <div class="row">
-      <button id="cashsend">send it all</button>
-      <button class="ghost" id="cashkey">copy secret key</button>
-      <button class="ghost" id="cashclose">close</button>
+    <div class="strip"><span class="gen" id="machinepulse"></span></div>
+    <div class="scroll">
+      <div id="gens"></div>
+      <div class="sub">winners</div>
+      <table id="board"><tbody></tbody></table>
     </div>
-    <div class="small" id="cashstatus"></div>
+  </section>
+</div>
+
+<div class="sheet hidden" id="cashout">
+  <div class="card">
+    <div class="h1">your winnings</div>
+    <div class="money" id="cashbal">$0.00</div>
+    <p class="h2">real money, kept in this browser. each game stakes a little of it; most of the stake goes into the pot. send it somewhere, or copy your secret key to move it all.</p>
+    <input id="cashto" placeholder="send to…" spellcheck="false" autocomplete="off">
+    <div class="row">
+      <button id="cashsend">send all</button>
+      <button class="ghost" id="cashkey">copy key</button>
+      <button class="ghost" id="cashclose">done</button>
+    </div>
+    <div class="h2" id="cashstatus"></div>
   </div>
 </div>
 
