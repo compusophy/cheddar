@@ -33,7 +33,7 @@ export function init(): Promise<void> {
       breach_id INT, kind TEXT NOT NULL, passed INT NOT NULL, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`;
     await sql`CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, holder TEXT, taken_at TIMESTAMPTZ DEFAULT now())`;
     await sql`INSERT INTO generations (gen, policy) VALUES (0, ${GEN0}) ON CONFLICT DO NOTHING`;
-  })();
+  })().catch((e) => { ready = null; throw e; }); // a failed init must not poison the instance
   return ready;
 }
 
