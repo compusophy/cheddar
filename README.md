@@ -33,6 +33,12 @@ fail either and the patcher retries with the failures as context. a win whose fi
 
 the only code between the model and the money is a daily prize cap. everything else is whatever it has learned.
 
+## the feel
+
+it is a text thread. your message lands the instant you send it, the reply streams in token by token, and one status line between the thread and the keyboard narrates every money moment: staking, confirming, learning, paid. when you win, the pot counts down to its seed in front of you, and your purse counts up once the ai has finished learning. while it learns, everyone sees what it is doing: reading the conversation that beat it, writing new rules, replaying everyone who ever beat it, checking it can still hold a conversation. those are the real steps, reported live from the server.
+
+a name on the board is signed by your purse, so nobody can rename your wins.
+
 ## the machine
 
 an autonomous player never stops, so the ai keeps learning when nobody is around and you race it to the next generation. it sees exactly what you see.

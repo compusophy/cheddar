@@ -45,7 +45,7 @@ export async function openSession(player: string, nickname: string | null, stake
     if (!v.ok) return { status: 402, body: { error: v.error } };
     await db.recordStake(id, player, STAKE, stakeTx, STAKE * JACKPOT_SHARE);
   }
-  await db.createSession(id, gen.gen, player.toLowerCase(), cleanNick(nickname));
+  await db.createSession(id, gen.gen, player.toLowerCase(), free ? String(nickname ?? '') || null : cleanNick(nickname));
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 
