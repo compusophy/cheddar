@@ -66,7 +66,7 @@ header > * + *, .strip > * + * { margin-left: var(--u); }
 
 .msg { max-width: 80%; padding: var(--u); white-space: pre-wrap; word-break: break-word; animation: rise .2s ease; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-.msg.me { align-self: flex-end; background: var(--gold); color: #000; font-weight: 500; }
+.msg.me { align-self: flex-end; background: var(--gold); border: 1px solid var(--gold); color: #000; font-weight: 500; }
 .msg.it { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
 .msg.it mark { background: none; color: var(--gold); font-weight: 700; }
 .msg.typing { display: flex; align-items: center; height: var(--row); }
@@ -111,7 +111,7 @@ textarea:focus, input:focus, button:focus { outline: none; }
 .replay > * + * { margin-top: var(--h); }
 .mini.me + .mini.it, .mini.it + .mini.me { margin-top: var(--u); }
 .mini { max-width: 88%; padding: var(--u); white-space: pre-wrap; word-break: break-word; }
-.mini.me { align-self: flex-end; background: var(--gold); color: #000; font-weight: 500; }
+.mini.me { align-self: flex-end; background: var(--gold); border: 1px solid var(--gold); color: #000; font-weight: 500; }
 .mini.it { align-self: flex-start; background: var(--bg); border: 1px solid var(--line); }
 .mini.it mark { background: none; color: var(--gold); font-weight: 700; }
 .learned { color: var(--dim); margin-top: var(--u); }
