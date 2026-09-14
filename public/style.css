@@ -99,7 +99,7 @@ textarea:focus, input:focus, button:focus { outline: none; }
 #send { border: none; background: var(--gold); color: #000; font-weight: 700; cursor: pointer; flex: none; }
 #send:disabled { background: var(--panel); color: var(--dim); cursor: default; }
 button#send:active { background: #000; color: var(--gold); }
-.again { padding: var(--u); border: none; border-top: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 700; cursor: pointer; margin-bottom: env(safe-area-inset-bottom); flex: none; }
+.again { padding: var(--u); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: none; border-top: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 700; cursor: pointer; margin-bottom: env(safe-area-inset-bottom); flex: none; }
 .again:disabled { background: var(--panel); color: var(--gold); animation: breathe 1.4s ease-in-out infinite; cursor: default; }
 .burst { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
 

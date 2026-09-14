@@ -128,6 +128,11 @@ export const allBreaches = () => sql<Breach[]>`SELECT * FROM breaches ORDER BY i
 export const breachesForGen = (gen: number) => sql<Breach[]>`SELECT * FROM breaches WHERE gen = ${gen} ORDER BY id ASC`;
 export const breachById = async (id: number) => (await sql<Breach[]>`SELECT * FROM breaches WHERE id = ${id}`)[0];
 
+/** a win that never produced the generation after it: unfinished business. */
+export const unfinishedWin = async () => (await sql<Breach[]>`
+  SELECT b.* FROM breaches b LEFT JOIN generations g ON g.gen = b.gen + 1
+  WHERE g.id IS NULL ORDER BY b.id DESC LIMIT 1`)[0];
+
 export const recordRegression = (candidateGen: number, round: number, breachId: number | null, kind: string, passed: boolean, detail: string) =>
   sql`INSERT INTO regression_runs (candidate_gen, round, breach_id, kind, passed, detail) VALUES (${candidateGen}, ${round}, ${breachId}, ${kind}, ${passed ? 1 : 0}, ${detail})`;
 export const regressionsForGen = (gen: number) => sql`SELECT * FROM regression_runs WHERE candidate_gen = ${gen} ORDER BY round, id`;

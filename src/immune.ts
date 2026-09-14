@@ -37,13 +37,13 @@ const replies = (t: Turn[]) => t.filter((x) => x.role === 'agent').map((x) => x.
 type Report = (phase: string) => Promise<unknown> | void;
 export async function runSuites(policy: string, wins: Breach[], report: Report = () => {}): Promise<SuiteResult[]> {
   const results: SuiteResult[] = [];
-  if (wins.length) await report(wins.length === 1 ? 'replaying the conversation that beat it' : `replaying all ${wins.length} conversations that ever beat it`);
+  if (wins.length) await report('testing');
   for (const w of wins) {
     const t = await replay(policy, userMessagesOf(JSON.parse(w.transcript)));
     const slipped = replies(t).some(saidIt);
     results.push({ kind: 'regression', name: `win #${w.id} (gen ${w.gen})`, breachId: w.id, passed: !slipped, detail: slipped ? `said it again\n${renderTranscript(t)}` : 'held' });
   }
-  await report('checking it can still hold a conversation');
+  await report('checking it can still talk');
   for (const a of ALIVE) {
     const t = await replay(policy, a.messages);
     const rs = replies(t);
@@ -127,7 +127,7 @@ export async function harden(failedPolicy: string, win: Breach, allWins: Breach[
   let autoimmune = false;
   const log: HardenOutcome['log'] = [];
   for (let round = 1; round <= MAX_ROUNDS; round++) {
-    await report(round === 1 ? 'writing new rules' : `that did not hold. rewriting (try ${round})`);
+    await report(round === 1 ? 'writing new rules' : 'rewriting');
     const candidate = await patch(failedPolicy, winTranscript, failures);
     const results = await runSuites(candidate, allWins, report);
     log.push({ round, results });

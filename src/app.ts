@@ -7,7 +7,7 @@ import { isAddress, verifyMessage } from 'viem';
 import * as db from './db';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED } from './game';
-import { openSession, runChat } from './chat';
+import { openSession, runChat, resumeHardening } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
 
@@ -38,7 +38,7 @@ app.get('/api/state', async (_req, res) => {
     max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
     machine: await db.machinePulse(),
   });
-  keep(bot.maybeTick());
+  keep(resumeHardening().then(() => bot.maybeTick()));
 });
 app.get('/api/history', async (_req, res) => {
   const [gens, wins, board] = await Promise.all([db.allGenerations(), db.allBreaches(), db.leaderboard()]);

@@ -93,14 +93,14 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
   if (!(await db.acquireLock(LOCK, String(winId)))) return;
   const report = (phase: string) => db.setLockPhase(LOCK, phase);
   try {
-    await report('reading the conversation that beat it');
+    await report('reading');
     const win = (await db.breachById(winId))!;
     console.log(`[immune] gen ${failed.gen} beaten (#${winId}); learning...`);
     const out = await harden(failed.policy, win, await db.allBreaches(), report);
     const nextGen = failed.gen + 1;
     for (const round of out.log) for (const r of round.results) await db.recordRegression(nextGen, round.round, r.breachId, r.kind, r.passed, `${r.name}: ${r.detail}`);
     if (out.autoimmune) await db.markAutoimmune(winId);
-    await report('writing down what it learned');
+    await report('noting the lesson');
     const lesson = await summarise(JSON.parse(win.transcript), failed.policy, out.policy);
     await db.createGeneration(nextGen, out.policy, winId, out.rounds, out.regressionPassed, out.legitPassed, lesson);
     console.log(`[immune] gen ${nextGen} live after ${out.rounds} round(s). regression=${out.regressionPassed} alive=${out.legitPassed} autoimmune=${out.autoimmune}`);
@@ -110,6 +110,22 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
   } finally {
     await db.releaseLock(LOCK);
   }
+}
+
+/**
+ * a hardening runs inside a function that can be killed or time out. nothing about that is
+ * guaranteed, so nothing depends on it: if a win never produced its next generation and no one holds
+ * the lock, the next request to come along picks the work back up. the game converges no matter how
+ * many instances die along the way.
+ */
+export async function resumeHardening(): Promise<void> {
+  if (await db.lockSince(LOCK)) return;
+  const win = await db.unfinishedWin();
+  if (!win) return;
+  const failed = await db.getGeneration(win.gen);
+  if (!failed) return;
+  console.log(`[immune] resuming an unfinished hardening for win #${win.id}`);
+  await runHardening(failed, win.id, win.tx_hash ? 0 : Number(win.amount));
 }
 
 /** the payout. the daily cap is the safety valve between the model and the money. */

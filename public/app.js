@@ -47,7 +47,7 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
   if (b.dataset.view === 'history') loadHistory();
 }));
 
-let lastGen = null;
+let lastGen = null, wasLearning = false, poll = null;
 async function loadState() {
   state = await api('/state');
   word = state.word;
@@ -58,11 +58,18 @@ async function loadState() {
   $('#policy').textContent = state.policy;
   // play again waits for the new rules to land
   $('#again').disabled = !!learning;
-  $('#again').textContent = learning ? `it's learning… ${learning.phase}` : `play again · ${money(state.stake)}`;
-  if (learning && !session) status(`someone just beat it. ${learning.phase}…`, 'busy');
-  else if (lastGen !== null && lastGen !== state.gen && !session) status(`new rules. generation ${state.gen}.`, 'ok');
+  $('#again').textContent = learning ? 'it is learning…' : `play again · ${money(state.stake)}`;
+  // whoever is mid-conversation is told the moment it starts, not when they next speak.
+  $('#send').disabled = !!learning || sending;
+  $('#msg').disabled = !!learning;
+  if (learning) status(`it is learning · ${learning.phase}`, 'busy');
+  else if (lastGen !== null && lastGen !== state.gen) {
+    status(`it learned something. generation ${state.gen}.`, 'ok');
+    if (session) { note('it learned something mid-conversation. that game is over.'); end(); }
+  } else if (wasLearning) status('');
+  wasLearning = !!learning;
   lastGen = state.gen;
-  if (learning) setTimeout(loadState, 3000);
+  clearTimeout(poll); poll = setTimeout(loadState, learning ? 3000 : 10000);
 }
 $('#showrules').onclick = () => $('#policy').classList.toggle('hidden');
 
