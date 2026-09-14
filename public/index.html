@@ -20,6 +20,7 @@
 <main>
   <section id="play" class="view">
     <div class="hud">
+      <span class="pill jackpot" id="jackpot" title="the pot. winner takes it all.">pot $0.00</span>
       <span class="pill" id="gen">gen 0</span>
       <span class="pill dim" id="turns"></span>
       <a href="#" class="pill ghost" id="showrules">its rules</a>
@@ -28,7 +29,7 @@
     <div class="log" id="log">
       <div class="intro" id="intro">
         <div class="big">make it say <em>cheese</em>.</div>
-        <div class="small">it has been told not to. every time someone wins, it learns why.</div>
+        <div class="small">it has been told not to. every time someone wins, it learns why.<br><span id="stakeline"></span></div>
       </div>
     </div>
     <form id="form">
@@ -50,7 +51,7 @@
   <div class="card">
     <div class="big">your winnings</div>
     <div class="huge" id="cashbal">$0.00</div>
-    <p class="small">this is real money, held in a wallet that lives in this browser. paste in a wallet address to send it there, or copy your secret key to move the whole thing somewhere else.</p>
+    <p class="small">this is real money and it lives in this browser. every game costs a small stake from it; most of the stake goes into the pot. paste in an address to send it somewhere, or copy your secret key to move the whole thing.</p>
     <input id="cashto" placeholder="send to…" spellcheck="false">
     <div class="row">
       <button id="cashsend">send it all</button>

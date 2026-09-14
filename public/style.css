@@ -80,3 +80,6 @@ td.money { color: var(--ok); text-align: right; }
 .card input { width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--fg); padding: 10px 12px; border-radius: 10px; font: inherit; margin: 12px 0; }
 .card .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .card .row button { padding: 10px 14px; }
+
+.pill.jackpot { color: #000; background: var(--gold); border-color: var(--gold); font-weight: bold; box-shadow: 0 0 22px rgba(255,194,51,.35); }
+.pill.jackpot.pop { animation: pop .6s ease; }

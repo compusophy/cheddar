@@ -1,4 +1,4 @@
-import { createWalletClient, createPublicClient, http, defineChain, encodeFunctionData, parseUnits, formatUnits, isAddress } from 'viem';
+import { createWalletClient, createPublicClient, http, defineChain, encodeFunctionData, parseUnits, formatUnits, isAddress, decodeEventLog } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 export const TEMPO_RPC = 'https://rpc.moderato.tempo.xyz';
@@ -18,6 +18,8 @@ const erc20Abi = [
     inputs: [{ name: 'to', type: 'address' }, { name: 'amount', type: 'uint256' }], outputs: [{ name: '', type: 'bool' }] },
   { name: 'balanceOf', type: 'function', stateMutability: 'view',
     inputs: [{ name: 'owner', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] },
+  { name: 'Transfer', type: 'event', anonymous: false,
+    inputs: [{ name: 'from', type: 'address', indexed: true }, { name: 'to', type: 'address', indexed: true }, { name: 'value', type: 'uint256', indexed: false }] },
 ] as const;
 
 const publicClient = createPublicClient({ chain: tempoChain, transport: http() });
@@ -63,6 +65,29 @@ export async function pay(to: string, amount: string): Promise<PayResult> {
   } catch (e) {
     console.error('[treasury] pay error', (e as Error).message);
     return { ok: false, error: (e as Error).message };
+  }
+}
+
+/**
+ * verify that a transaction moved at least `amount` of the stablecoin from `from` to `to`.
+ * this is how a stake is checked: the purse sends, the server confirms on chain, nothing is trusted
+ * from the client. waits briefly for the receipt so a just-sent stake counts.
+ */
+export async function verifyTransfer(hash: string, from: string, to: string, amount: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout: 20_000 });
+    if (receipt.status !== 'success') return { ok: false, error: 'stake transaction failed' };
+    const want = parseUnits(amount.toFixed(6), 6);
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== PATH_USD.toLowerCase()) continue;
+      try {
+        const ev = decodeEventLog({ abi: erc20Abi, data: log.data, topics: log.topics, eventName: 'Transfer' });
+        if (ev.args.from.toLowerCase() === from.toLowerCase() && ev.args.to.toLowerCase() === to.toLowerCase() && ev.args.value >= want) return { ok: true };
+      } catch { /* not a transfer */ }
+    }
+    return { ok: false, error: 'that transaction is not a stake to the house' };
+  } catch (e) {
+    return { ok: false, error: 'could not find the stake on chain yet' };
   }
 }
 

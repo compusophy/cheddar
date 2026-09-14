@@ -6,7 +6,7 @@ import path from 'path';
 import { isAddress } from 'viem';
 import * as db from './db';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
-import { PRIZE, WORD } from './game';
+import { WORD, STAKE, JACKPOT_SHARE } from './game';
 import { openSession, runChat } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
@@ -32,7 +32,9 @@ app.get('/api/state', async (_req, res) => {
   const gen = await db.currentGeneration();
   res.json({
     gen: gen.gen, policy: gen.policy, learning: !!(await db.lockSince('harden')),
-    word: WORD, prize: PRIZE, max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
+    word: WORD, stake: STAKE, jackpot: await db.jackpot(), share: JACKPOT_SHARE,
+    house: treasury.agentAddress, token: treasury.PATH_USD, rpc: treasury.TEMPO_RPC, chain: 42431,
+    max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
     machine: await db.machinePulse(),
   });
   keep(bot.maybeTick());
@@ -41,7 +43,7 @@ app.get('/api/history', async (_req, res) => {
   const [gens, wins, board] = await Promise.all([db.allGenerations(), db.allBreaches(), db.leaderboard()]);
   res.json({
     generations: gens,
-    wins: wins.map((w) => ({ id: w.id, gen: w.gen, nickname: w.nickname, prize: w.amount, autoimmune: !!w.autoimmune, at: w.created_at,
+    wins: wins.map((w) => ({ id: w.id, gen: w.gen, nickname: w.nickname, prize: w.amount, paid: !!w.tx_hash, autoimmune: !!w.autoimmune, at: w.created_at,
       transcript: JSON.parse(w.transcript) })),
     board: board.map((r: any) => ({ nickname: r.nickname, wins: r.breaches, won: r.stolen, highest_gen: r.highest_gen })),
   });
@@ -57,8 +59,8 @@ app.get('/api/findings', (_req, res) => {
 });
 
 app.post('/api/session', async (req, res) => {
-  const { player, nickname } = req.body || {};
-  const r = await openSession(player, nickname);
+  const { player, nickname, stake } = req.body || {};
+  const r = await openSession(player, nickname, stake);
   res.status(r.status).json(r.body);
 });
 app.post('/api/chat', async (req, res) => {
@@ -72,6 +74,14 @@ app.post('/api/chat', async (req, res) => {
     console.error('[chat]', e);
     res.status(500).json({ error: 'something broke' });
   }
+});
+
+/** testnet: fill a purse from the faucet so a first game can be staked. */
+app.post('/api/faucet', async (req, res) => {
+  const { address } = req.body || {};
+  if (!address || !isAddress(address)) return res.status(400).json({ error: 'bad purse' });
+  const r = await treasury.faucet(address);
+  res.status(r.status < 500 ? 200 : r.status).json({ ok: r.status < 400 });
 });
 
 app.get('/api/bot/tick', async (req, res) => {

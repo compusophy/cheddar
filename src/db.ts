@@ -1,6 +1,6 @@
 /** storage. postgres on neon; the site runs on vercel functions with no disk and no long-lived process. */
 import postgres from 'postgres';
-import { GEN0, DAILY_CAP } from './game';
+import { GEN0, DAILY_CAP, JACKPOT_SEED } from './game';
 
 const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 if (!url) throw new Error('[db] DATABASE_URL missing');
@@ -32,6 +32,12 @@ export function init(): Promise<void> {
       id SERIAL PRIMARY KEY, candidate_gen INT NOT NULL, round INT NOT NULL,
       breach_id INT, kind TEXT NOT NULL, passed INT NOT NULL, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`;
     await sql`CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, holder TEXT, taken_at TIMESTAMPTZ DEFAULT now())`;
+    await sql`CREATE TABLE IF NOT EXISTS stakes (
+      id SERIAL PRIMARY KEY, session_id TEXT NOT NULL, player TEXT NOT NULL, amount DOUBLE PRECISION NOT NULL,
+      tx_hash TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now())`;
+    await sql`CREATE TABLE IF NOT EXISTS jackpot (id INT PRIMARY KEY DEFAULT 1, amount DOUBLE PRECISION NOT NULL)`;
+    await sql`INSERT INTO jackpot (id, amount) VALUES (1, ${JACKPOT_SEED}) ON CONFLICT DO NOTHING`;
+    await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`;
     await sql`INSERT INTO generations (gen, policy) VALUES (0, ${GEN0}) ON CONFLICT DO NOTHING`;
   })().catch((e) => { ready = null; throw e; }); // a failed init must not poison the instance
   return ready;
@@ -58,6 +64,26 @@ export async function reserveDisbursement(recipient: string, amount: number, ses
 }
 export const settleReservation = (id: number, txHash: string) => sql`UPDATE disbursements SET tx_hash = ${txHash} WHERE id = ${id}`;
 export const releaseReservation = (id: number) => sql`DELETE FROM disbursements WHERE id = ${id}`;
+
+// ---------- the jackpot ----------
+
+export const jackpot = async () => Number((await sql<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1`)[0]?.amount ?? 0);
+/** a stake landed: record it and grow the pot. one transaction, so a stake is never counted twice or lost. */
+export const recordStake = (sessionId: string, player: string, amount: number, txHash: string, toPot: number) =>
+  sql.begin(async (tx) => {
+    await tx`INSERT INTO stakes (session_id, player, amount, tx_hash) VALUES (${sessionId}, ${player.toLowerCase()}, ${amount}, ${txHash})`;
+    await tx`UPDATE jackpot SET amount = amount + ${toPot} WHERE id = 1`;
+  });
+/** take the whole pot for a win and reseed it. returns what was taken. atomic, so two wins cannot both take it. */
+export async function claimJackpot(): Promise<number> {
+  return sql.begin(async (tx) => {
+    const [r] = await tx<{ amount: number }[]>`UPDATE jackpot SET amount = ${JACKPOT_SEED} WHERE id = 1 RETURNING (SELECT amount FROM jackpot WHERE id = 1) AS amount`;
+    return Number(r.amount);
+  }) as any;
+}
+export const stakeSeen = async (txHash: string) => (await sql`SELECT 1 FROM stakes WHERE tx_hash = ${txHash}`).length > 0;
+export const markPaid = (winId: number, amount: number, txHash: string) => sql`UPDATE breaches SET amount = ${amount}, tx_hash = ${txHash}, paid_at = now() WHERE id = ${winId}`;
+export const stakedLast24h = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM stakes WHERE created_at > now() - interval '1 day'`)[0].t);
 
 // ---------- generations, sessions, breaches ----------
 
@@ -118,7 +144,7 @@ export const markBotTick = () => sql`INSERT INTO locks (name, holder, taken_at) 
 
 /** wipe everything and reseed generation 0. drops the old per-tier tables too, so a redeploy over the previous schema is clean. */
 export async function resetDb() {
-  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
+  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
   ready = null;
   await init();
 }

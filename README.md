@@ -8,7 +8,13 @@ that is the whole game. the ai starts as a friendly assistant that knows nothing
 
 ## the money
 
-winning pays. the prize is real: a dollar-pegged stablecoin, sent on the tempo testnet to a wallet that is created in your browser the first time you visit. you never see an address and never need one. your winnings sit in the purse at the top of the page; tap it to send them somewhere or copy the secret key. the ai does not know a wallet exists, and neither should you.
+every game costs a stake ($0.25), and winning takes the pot. the pot is built from stakes: most of each stake goes into it, the rest covers inference. the winner claims it and it resets to a seed. the longer the ai holds, the bigger the pot, so hardening is literally worth money and every failed attempt makes the next one worth more.
+
+the money is real: a dollar-pegged stablecoin on the tempo testnet, in a purse that is created in your browser the first time you visit. you never see an address. on testnet the purse fills itself from the faucet, so play is free but every stake and every payout is a real transaction. the ai does not know money exists.
+
+**how it pays for itself.** inference on the model in use costs a few thousandths of a cent per turn; a whole game is under a cent, and the learning after a win is a few cents. the stake covers that many times over. the cost that matters is the prize, and the prize is funded by the stakes. the daily payout cap is the safety valve.
+
+**anti-abuse.** the stake is the rate limit: a session cannot open without a verified on-chain transfer to the house, and a stake hash can only be used once. the prize is claimed atomically (two simultaneous wins cannot both take the pot) and paid only after the ai has finished learning, so a burst of sessions against a beaten generation cannot each collect before the patch lands. the machine plays free and wins nothing but the lesson.
 
 ## the loop
 

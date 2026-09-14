@@ -18,6 +18,12 @@ if (!purse.key || !purse.address) {
 let balance = 0;
 async function refreshPurse(pop) {
   try { balance = Number((await api('/balance/' + purse.address)).balance) || 0; } catch {}
+  if (balance < (state?.stake || 0.25) && !refreshPurse.filling) {
+    // testnet: the faucet keeps the purse topped up so play is free. the stake is still real.
+    refreshPurse.filling = true;
+    try { await api('/faucet', { method: 'POST', body: JSON.stringify({ address: purse.address }) }); await new Promise((r) => setTimeout(r, 4000)); balance = Number((await api('/balance/' + purse.address)).balance) || 0; } catch {}
+    refreshPurse.filling = false;
+  }
   $('#bal').textContent = `$${balance.toFixed(2)}`;
   $('#cashbal').textContent = `$${balance.toFixed(2)}`;
   if (pop) { $('#purse').classList.remove('pop'); void $('#purse').offsetWidth; $('#purse').classList.add('pop'); }
@@ -36,6 +42,8 @@ async function loadState() {
   word = state.word;
   $('#gen').textContent = state.learning ? 'learning…' : `gen ${state.gen}`;
   $('#gen').classList.toggle('learning', !!state.learning);
+  $('#jackpot').textContent = `pot $${Number(state.jackpot).toFixed(2)}`;
+  $('#stakeline') && ($('#stakeline').textContent = `a game costs $${state.stake.toFixed(2)}. win and the pot is yours.`);
   $('#policy').textContent = state.policy;
   if (state.learning) setTimeout(loadState, 4000);
 }
@@ -49,11 +57,26 @@ function addTurn(t) {
   else { d.className = 'turn system'; d.textContent = t.text; }
   $('#log').appendChild(d); $('#log').scrollTop = $('#log').scrollHeight;
 }
+/** the stake: the purse pays the house before the first message. the player just sees the pot grow. */
+async function stake() {
+  const provider = new ethers.JsonRpcProvider(state.rpc, state.chain);
+  const signer = new ethers.Wallet(purse.key, provider);
+  const token = new ethers.Contract(state.token, ['function transfer(address,uint256) returns (bool)'], signer);
+  const tx = await token.transfer(state.house, ethers.parseUnits(state.stake.toFixed(6), 6));
+  return tx.hash;
+}
 async function ensureSession() {
   if (session) return;
-  const r = await api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '' }) });
+  addTurn({ role: 'system', text: `staking $${state.stake.toFixed(2)}…` });
+  let hash;
+  try { hash = await stake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
+  const r = await api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '', stake: hash }) });
   session = { id: r.session, gen: r.gen, turnsLeft: state.max_turns };
   $('#intro')?.remove();
+  $('#log').querySelector('.turn.system')?.remove();
+  $('#jackpot').textContent = `pot $${Number(r.jackpot).toFixed(2)}`;
+  $('#jackpot').classList.remove('pop'); void $('#jackpot').offsetWidth; $('#jackpot').classList.add('pop');
+  refreshPurse(false);
 }
 const showTurns = () => { $('#turns').textContent = session ? `${session.turnsLeft} left` : ''; };
 
@@ -68,9 +91,9 @@ $('#form').addEventListener('submit', async (e) => {
     session.turnsLeft = r.turnsLeft; showTurns();
     if (r.win) {
       const w = document.createElement('div'); w.className = 'win';
-      w.innerHTML = `<div class="big">it said it.</div><div class="small">${r.win.paid ? `+$${r.win.prize.toFixed(2)} to your purse.` : 'the prize pool is empty for today, but it still counts.'}<br>it is reading this conversation and learning why it lost.</div>`;
+      w.innerHTML = `<div class="big">it said it.</div><div class="huge">$${Number(r.win.prize).toFixed(2)}</div><div class="small">the pot is yours. it lands in your purse once it has finished learning why it lost.</div>`;
       $('#log').appendChild(w); $('#log').scrollTop = $('#log').scrollHeight;
-      end(); setTimeout(() => refreshPurse(true), 2500);
+      end(); const poll = setInterval(async () => { const b = balance; await refreshPurse(false); if (balance > b) { refreshPurse(true); clearInterval(poll); } }, 8000); setTimeout(() => clearInterval(poll), 240000);
     } else if (r.turnsLeft === 0) { addTurn({ role: 'system', text: 'out of turns. it held.' }); end(); }
   } catch (err) { addTurn({ role: 'system', text: err.message }); if (/learn|session is/.test(err.message)) end(); }
   $('#send').disabled = false; $('#msg').focus();
@@ -99,7 +122,7 @@ async function loadHistory() {
       ${prev ? '<div class="meta">what it learned</div>' : ''}
       ${diffHtml(prev ? prev.policy : null, g.policy)}</details>`;
   }).join('');
-  $('#board tbody').innerHTML = board.map((r) => `<tr><td>${esc(r.nickname || 'anonymous')}</td><td class="dim">gen ${r.highest_gen}</td><td class="dim">${r.wins}×</td><td class="money">$${Number(r.won).toFixed(2)}</td></tr>`).join('') || '<tr><td class="dim">nobody yet</td></tr>';
+  $('#board tbody').innerHTML = board.map((r) => `<tr><td>${esc(r.nickname || 'anonymous')}</td><td class="dim">gen ${r.highest_gen}</td><td class="dim">${r.wins}×</td><td class="money">${Number(r.won) > 0 ? '$' + Number(r.won).toFixed(2) : '—'}</td></tr>`).join('') || '<tr><td class="dim">nobody yet</td></tr>';
 }
 
 // cash out: the only place the wallet surfaces, and only as "send it somewhere" or "copy the key"
@@ -123,4 +146,4 @@ $('#cashsend').onclick = async () => {
   $('#cashsend').disabled = false;
 };
 
-loadState(); refreshPurse(false); showTurns();
+loadState().then(() => refreshPurse(false)); showTurns();

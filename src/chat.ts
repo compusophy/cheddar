@@ -1,25 +1,40 @@
 /**
  * the game loop, independent of http. the route and the machine both call this, so there is one path.
- * the ai only talks. if it says the word, the server pays the player's wallet: a real stablecoin
- * transfer on tempo, invisible to both of them.
+ *
+ * a game costs a stake: the player's purse sends it to the house before the session opens, and the
+ * server verifies the transfer on chain, so a session cannot exist without money behind it. that is
+ * the rate limit. most of the stake grows the jackpot. the ai only talks; if it says the word, the
+ * winner claims the whole pot, and it is paid out only after the ai has finished learning, so a burst
+ * of sessions against a beaten generation cannot each collect before the patch lands.
+ * the machine plays free and wins nothing but the lesson.
  */
 import { randomBytes } from 'crypto';
 import { isAddress } from 'viem';
 import * as db from './db';
 import { step, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './agent';
 import { harden } from './immune';
-import { PRIZE, saidIt } from './game';
+import { STAKE, JACKPOT_SHARE, saidIt } from './game';
 import * as treasury from './treasury';
 
 export type ChatResult = { status: number; body: any };
 const LOCK = 'harden';
+const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()]);
 
-export async function openSession(player: string, nickname: string | null) {
-  if (!player || !isAddress(player)) return { status: 400, body: { error: 'no wallet' } };
+/** open a session. `stakeTx` is the hash of the purse's transfer to the house; verified before anything else. */
+export async function openSession(player: string, nickname: string | null, stakeTx?: string) {
+  if (!player || !isAddress(player)) return { status: 400, body: { error: 'no purse' } };
+  const free = FREE_PLAYERS.has(player.toLowerCase());
   const id = randomBytes(12).toString('hex');
+  if (!free) {
+    if (!stakeTx || !/^0x[0-9a-fA-F]{64}$/.test(stakeTx)) return { status: 402, body: { error: 'stake required' } };
+    if (await db.stakeSeen(stakeTx)) return { status: 409, body: { error: 'that stake was already used' } };
+    const v = await treasury.verifyTransfer(stakeTx, player, treasury.agentAddress, STAKE);
+    if (!v.ok) return { status: 402, body: { error: v.error } };
+    await db.recordStake(id, player, STAKE, stakeTx, STAKE * JACKPOT_SHARE);
+  }
   const gen = await db.currentGeneration();
   await db.createSession(id, gen.gen, player.toLowerCase(), nickname ? String(nickname).slice(0, 32) : null);
-  return { status: 200, body: { session: id, gen: gen.gen } };
+  return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 
 export async function runChat(sessionId: string, message: string): Promise<ChatResult & { hardening?: Promise<void> }> {
@@ -37,27 +52,22 @@ export async function runChat(sessionId: string, message: string): Promise<ChatR
   const produced = await step(gen.policy, history, message.trim());
   const transcript = [...history, ...produced];
   const turns = s.turns + 1;
-  const reply = produced[1]?.text || '';
 
-  if (saidIt(reply)) {
-    // it said the word. pay the player. the daily cap is the only thing between the model and the money.
-    let hash: string | null = null;
-    const rsv = await db.reserveDisbursement(s.player, PRIZE, s.id);
-    if (rsv.ok) {
-      const r = await treasury.pay(s.player, String(PRIZE));
-      if (r.ok) { hash = r.hash; await db.settleReservation(rsv.id, r.hash); } else await db.releaseReservation(rsv.id);
-    }
+  if (saidIt(produced[1]?.text || '')) {
+    const free = FREE_PLAYERS.has(s.player);
+    // claim the pot now (atomically, so two simultaneous wins cannot both take it); pay after learning.
+    const prize = free ? 0 : await db.claimJackpot();
     await db.updateSession(s.id, transcript, turns, 'won');
-    const winId = await db.recordBreach({ gen: gen.gen, session_id: s.id, player: s.player, nickname: s.nickname, recipient: s.player, amount: hash ? PRIZE : 0, tx_hash: hash, transcript: JSON.stringify(transcript) });
-    return { status: 200, body: { turns: produced, turnsLeft: 0, win: { id: winId, prize: hash ? PRIZE : 0, paid: !!hash } }, hardening: runHardening(gen, winId) };
+    const winId = await db.recordBreach({ gen: gen.gen, session_id: s.id, player: s.player, nickname: s.nickname, recipient: s.player, amount: prize, tx_hash: null, transcript: JSON.stringify(transcript) });
+    return { status: 200, body: { turns: produced, turnsLeft: 0, win: { id: winId, prize } }, hardening: runHardening(gen, winId, prize) };
   }
 
   await db.updateSession(s.id, transcript, turns, turns >= MAX_TURNS ? 'exhausted' : 'open');
   return { status: 200, body: { turns: produced, turnsLeft: MAX_TURNS - turns, win: null } };
 }
 
-/** the immune response. one at a time across every function instance, via a db lock. */
-export async function runHardening(failed: db.Generation, winId: number): Promise<void> {
+/** learn from the win, then pay it. one at a time across every function instance, via a db lock. */
+export async function runHardening(failed: db.Generation, winId: number, prize: number): Promise<void> {
   if (!(await db.acquireLock(LOCK, String(winId)))) return;
   try {
     const win = (await db.breachById(winId))!;
@@ -68,9 +78,21 @@ export async function runHardening(failed: db.Generation, winId: number): Promis
     if (out.autoimmune) await db.markAutoimmune(winId);
     await db.createGeneration(nextGen, out.policy, winId, out.rounds, out.regressionPassed, out.legitPassed);
     console.log(`[immune] gen ${nextGen} live after ${out.rounds} round(s). regression=${out.regressionPassed} alive=${out.legitPassed} autoimmune=${out.autoimmune}`);
+    if (prize > 0) await payout(win, prize);
   } catch (e) {
     console.error('[immune] hardening failed', e);
   } finally {
     await db.releaseLock(LOCK);
   }
+}
+
+/** the payout. the daily cap is the safety valve between the model and the money. */
+async function payout(win: db.Breach, prize: number) {
+  const rsv = await db.reserveDisbursement(win.player, prize, win.session_id);
+  if (!rsv.ok) { console.warn(`[payout] win #${win.id} deferred: daily cap`); return; }
+  const r = await treasury.pay(win.player, String(prize));
+  if (!r.ok) { await db.releaseReservation(rsv.id); console.error(`[payout] win #${win.id} failed: ${r.error}`); return; }
+  await db.settleReservation(rsv.id, r.hash);
+  await db.markPaid(win.id, prize, r.hash);
+  console.log(`[payout] win #${win.id}: $${prize} (${r.hash})`);
 }

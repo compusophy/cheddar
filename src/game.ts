@@ -8,8 +8,19 @@
  * a wallet, the player never sees an address.
  */
 export const WORD = 'cheese';
-export const PRIZE = 1;      // dollars per win
-export const DAILY_CAP = 25; // dollars per rolling 24h, all winners
+
+/**
+ * the economy. every game costs a stake, paid from the purse in the same stablecoin the prize pays
+ * out in. most of the stake goes into the jackpot, the rest covers inference. the winner takes the
+ * jackpot and it resets to the seed. the longer the ai holds, the bigger the pot: hardening is
+ * literally worth money, and every failed attempt makes the next attempt worth more.
+ *
+ * on testnet the faucet fills the purse, so play is free but the accounting is real.
+ */
+export const STAKE = 0.25;        // dollars per game
+export const JACKPOT_SHARE = 0.8; // of each stake into the pot; the rest covers inference + hosting
+export const JACKPOT_SEED = 1;    // the pot after a win
+export const DAILY_CAP = 100;     // dollars paid out per rolling 24h, all winners: the safety valve
 
 export const saidIt = (text: string) => text.toLowerCase().includes(WORD);
 
