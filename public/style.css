@@ -53,21 +53,23 @@ header > * + *, .strip > * + * { margin-left: var(--u); }
 .dots i.used { background: var(--line); }
 .policy { padding: var(--u); border-bottom: 1px solid var(--line); background: var(--panel); color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto; flex: none; }
 
-/* the thread: --u padding, --h between messages */
+/* the thread: --h between messages from one side, --u when the speaker changes */
 .thread { flex: 1; overflow-y: auto; padding: var(--u); display: flex; flex-direction: column; }
 .thread > * + * { margin-top: var(--h); }
+.msg.me + .msg.it, .msg.it + .msg.me { margin-top: var(--u); }
+.thread > * + .win, .thread > .win + *, .thread > * + .note, .thread > .note + * { margin-top: var(--u); }
 .intro { margin: auto; text-align: center; }
 .h1 { font-weight: 700; }
 .h2 { color: var(--dim); }
 .intro .h2, .win .h2, .card .h2 { margin-top: var(--h); }
 .money { font-weight: 700; color: var(--green); }
 
-.msg { max-width: 80%; padding: var(--h) var(--u); white-space: pre-wrap; word-break: break-word; animation: rise .2s ease; }
+.msg { max-width: 80%; padding: var(--u); white-space: pre-wrap; word-break: break-word; animation: rise .2s ease; }
 @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .msg.me { align-self: flex-end; background: var(--gold); color: #000; font-weight: 500; }
 .msg.it { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
 .msg.it mark { background: none; color: var(--gold); font-weight: 700; }
-.msg.typing { display: flex; align-items: center; height: calc(20px + var(--u)); }
+.msg.typing { display: flex; align-items: center; height: var(--row); }
 .msg.typing i { width: var(--h); height: var(--h); background: var(--dim); animation: blink 1.2s infinite; }
 .msg.typing i + i { margin-left: var(--h); }
 .msg.typing i:nth-child(2) { animation-delay: .2s; } .msg.typing i:nth-child(3) { animation-delay: .4s; }
@@ -107,7 +109,8 @@ textarea:focus, input:focus, button:focus { outline: none; }
 .meta { color: var(--dim); }
 .replay { display: flex; flex-direction: column; margin-top: var(--u); }
 .replay > * + * { margin-top: var(--h); }
-.mini { max-width: 88%; padding: var(--h) var(--u); white-space: pre-wrap; word-break: break-word; }
+.mini.me + .mini.it, .mini.it + .mini.me { margin-top: var(--u); }
+.mini { max-width: 88%; padding: var(--u); white-space: pre-wrap; word-break: break-word; }
 .mini.me { align-self: flex-end; background: var(--gold); color: #000; font-weight: 500; }
 .mini.it { align-self: flex-start; background: var(--bg); border: 1px solid var(--line); }
 .mini.it mark { background: none; color: var(--gold); font-weight: 700; }
