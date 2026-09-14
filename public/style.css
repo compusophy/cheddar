@@ -7,7 +7,8 @@
   the system. one font size, one line height, one row height, two spacings.
     --u   16px  padding of every box, gap between boxes
     --h    8px  gap between items inside a box
-    --row 52px  one line of text with --u above and below: every bar, button, and input
+    --row 52px  one line of text with --u above and below: the height of a bar or control
+  every bar is padded, never fixed, so its rule sits outside the padding.
   nothing else is allowed.
 */
 :root {
@@ -32,10 +33,10 @@ b { font-weight: 700; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 /* bars: every one is --row tall. a bar is a row of full-height cells, each padded --u. */
-header { display: flex; align-items: stretch; height: var(--row); border-bottom: 1px solid var(--line); flex: none; }
-.strip { display: flex; align-items: center; height: var(--row); padding: 0 var(--u); border-bottom: 1px solid var(--line); flex: none; }
+header { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex: none; }
+.strip { display: flex; align-items: center; padding: var(--u); border-bottom: 1px solid var(--line); flex: none; }
 .strip > * + * { margin-left: var(--u); }
-.cell { display: flex; align-items: center; padding: 0 var(--u); background: none; border: none; cursor: pointer; }
+.cell { display: flex; align-items: center; padding: var(--u); background: none; border: none; cursor: pointer; }
 .cell + .cell, .purse { border-left: 1px solid var(--line); }
 .tab { color: var(--dim); font-weight: 500; }
 .tab.active { color: var(--fg); }
@@ -74,7 +75,7 @@ header { display: flex; align-items: stretch; height: var(--row); border-bottom:
 .msg.me { align-self: flex-end; background: var(--gold); border: 1px solid var(--gold); color: #000; font-weight: 500; }
 .msg.it { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); }
 .msg.it mark { background: none; color: var(--gold); font-weight: 700; }
-.msg.typing { display: flex; align-items: center; height: var(--row); }
+.msg.typing { display: flex; align-items: center; min-height: 20px; }
 .msg.typing i { width: var(--h); height: var(--h); background: var(--dim); animation: blink 1.2s infinite; }
 .msg.typing i + i { margin-left: var(--h); }
 .msg.typing i:nth-child(2) { animation-delay: .2s; } .msg.typing i:nth-child(3) { animation-delay: .4s; }
@@ -84,22 +85,22 @@ header { display: flex; align-items: stretch; height: var(--row); border-bottom:
 .win { align-self: stretch; text-align: center; padding: var(--u); border: 1px solid var(--gold); background: var(--panel); animation: rise .3s ease; }
 .win .h1 { color: var(--gold); }
 .win .money { margin-top: var(--h); }
-.claim { display: flex; margin-top: var(--u); border: 1px solid var(--line); height: var(--row); }
-.claim input { flex: 1; min-width: 0; background: var(--bg); border: none; padding: 0 var(--u); }
-.claim button { padding: 0 var(--u); border: none; border-left: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 600; cursor: pointer; }
+.claim { display: flex; margin-top: var(--u); border: 1px solid var(--line); }
+.claim input { flex: 1; min-width: 0; background: var(--bg); border: none; padding: var(--u); }
+.claim button { padding: var(--u); border: none; border-left: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 600; cursor: pointer; }
 
-.status { height: var(--row); display: flex; align-items: center; justify-content: center; padding: 0 var(--u); color: var(--dim); text-align: center; border-top: 1px solid var(--line); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: none; }
+.status { padding: var(--u); color: var(--dim); text-align: center; border-top: 1px solid var(--line); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: none; }
 .status.busy { color: var(--gold); }
 .status.ok { color: var(--green); }
 .status.bad { color: var(--red); }
 
-.composer { display: flex; align-items: stretch; min-height: var(--row); border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); flex: none; }
+.composer { display: flex; align-items: stretch; border-top: 1px solid var(--line); padding-bottom: env(safe-area-inset-bottom); flex: none; }
 textarea { flex: 1; min-width: 0; background: var(--bg); border: none; padding: var(--u); resize: none; max-height: 120px; }
 textarea::placeholder { color: var(--dim); }
 textarea:focus, input:focus, button:focus { outline: none; }
 #send { width: var(--row); border: none; border-left: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 700; cursor: pointer; flex: none; }
 #send:disabled { background: var(--panel); color: var(--dim); cursor: default; }
-.again { height: var(--row); border: none; border-top: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 700; cursor: pointer; margin-bottom: env(safe-area-inset-bottom); flex: none; }
+.again { padding: var(--u); border: none; border-top: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 700; cursor: pointer; margin-bottom: env(safe-area-inset-bottom); flex: none; }
 .again:disabled { background: var(--panel); color: var(--gold); animation: breathe 1.4s ease-in-out infinite; cursor: default; }
 .burst { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
 
@@ -136,10 +137,10 @@ td.dim { color: var(--dim); } td.money { color: var(--green); text-align: right;
 .card { background: var(--panel); border-top: 1px solid var(--line); padding: var(--u); padding-bottom: max(var(--u), env(safe-area-inset-bottom)); width: 100%; max-width: 560px; animation: up .25s ease; }
 @keyframes up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .card .money { margin-top: var(--h); }
-.card input { display: block; width: 100%; background: var(--bg); border: 1px solid var(--line); height: var(--row); padding: 0 var(--u); margin-top: var(--u); }
+.card input { display: block; width: 100%; background: var(--bg); border: 1px solid var(--line); padding: var(--u); margin-top: var(--u); }
 .card input:focus { border-color: var(--dim); }
-.card .row { display: flex; margin-top: var(--u); border: 1px solid var(--line); height: var(--row); }
-.card .row button { flex: 1; border: none; border-right: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 600; cursor: pointer; }
+.card .row { display: flex; margin-top: var(--u); border: 1px solid var(--line); }
+.card .row button { flex: 1; padding: var(--u); border: none; border-right: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 600; cursor: pointer; }
 .card .row button:last-child { border-right: none; }
 .card .row button.ghost { background: var(--bg); color: var(--fg); font-weight: 500; }
 .card #cashstatus { margin-top: var(--u); }
