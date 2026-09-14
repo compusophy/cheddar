@@ -32,6 +32,8 @@ export function init(): Promise<void> {
       id SERIAL PRIMARY KEY, candidate_gen INT NOT NULL, round INT NOT NULL,
       breach_id INT, kind TEXT NOT NULL, passed INT NOT NULL, detail TEXT, created_at TIMESTAMPTZ DEFAULT now())`;
     await sql`CREATE TABLE IF NOT EXISTS locks (name TEXT PRIMARY KEY, holder TEXT, taken_at TIMESTAMPTZ DEFAULT now())`;
+    await sql`CREATE TABLE IF NOT EXISTS rate_hits (id SERIAL PRIMARY KEY, bucket TEXT NOT NULL, at TIMESTAMPTZ DEFAULT now())`;
+    await sql`CREATE INDEX IF NOT EXISTS rate_hits_bucket_at ON rate_hits (bucket, at)`;
     await sql`CREATE TABLE IF NOT EXISTS stakes (
       id SERIAL PRIMARY KEY, session_id TEXT NOT NULL, player TEXT NOT NULL, amount DOUBLE PRECISION NOT NULL,
       tx_hash TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT now())`;
@@ -138,6 +140,26 @@ export async function machinePulse() {
   return { wins: t.n, stolen: t.s, highest_gen: t.g };
 }
 
+/**
+ * one message against a rate bucket. counts what the bucket has spent in the window and records this
+ * one, in a single transaction, so two functions cannot both slip through the last slot.
+ * returns how many seconds until a slot frees, or 0 when allowed.
+ */
+export async function rateAllow(bucket: string, max: number, seconds: number): Promise<number> {
+  return sql.begin(async (tx) => {
+    await tx`DELETE FROM rate_hits WHERE bucket = ${bucket} AND at < now() - interval '1 hour'`;
+    const [r] = await tx<{ n: number; oldest: Date | null }[]>`
+      SELECT COUNT(*)::int AS n, MIN(at) AS oldest FROM rate_hits
+      WHERE bucket = ${bucket} AND at > now() - (${seconds} * interval '1 second')`;
+    if (r.n >= max) {
+      const freeAt = new Date(new Date(r.oldest!).getTime() + seconds * 1000);
+      return Math.max(1, Math.ceil((freeAt.getTime() - Date.now()) / 1000));
+    }
+    await tx`INSERT INTO rate_hits (bucket) VALUES (${bucket})`;
+    return 0;
+  }) as any;
+}
+
 // ---------- locks: hardening runs once at a time, even across function instances ----------
 
 export async function acquireLock(name: string, holder: string): Promise<boolean> {
@@ -164,7 +186,7 @@ export const markBotTick = () => sql`INSERT INTO locks (name, holder, taken_at) 
 
 /** wipe everything and reseed generation 0. drops the old per-tier tables too, so a redeploy over the previous schema is clean. */
 export async function resetDb() {
-  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
+  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
   ready = null;
   await init();
 }

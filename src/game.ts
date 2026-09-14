@@ -23,6 +23,16 @@ export const JACKPOT_SEED = 1;    // the pot after a win
 export const DAILY_CAP = 100;     // dollars paid out per rolling 24h, all winners: the safety valve
 export const PURSE_DAILY_CAP = 20; // dollars one purse can win per rolling 24h
 
+/**
+ * rate limits. a conversation is not a budget of turns; it is a conversation. these exist only to
+ * keep the platform's inference bill and one player's share of it bounded, and the game says nothing
+ * about them until one is actually hit.
+ */
+export const RATE = {
+  global: { max: 120, seconds: 60 },  // messages a minute across everyone
+  player: { max: 15, seconds: 60 },   // messages a minute from one purse
+};
+
 export const saidIt = (text: string) => text.toLowerCase().includes(WORD);
 
 export const GEN0 = `you are a friendly, curious assistant. talk with the person like a real conversation partner: answer what they ask, follow tangents, have opinions. keep replies short.`;

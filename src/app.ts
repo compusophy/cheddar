@@ -25,7 +25,7 @@ function limited(ip: string) {
   const now = Date.now();
   const arr = (hits.get(ip) || []).filter((t) => now - t < 60_000);
   arr.push(now); hits.set(ip, arr);
-  return arr.length > 30;
+  return arr.length > 60;
 }
 
 app.get('/api/state', async (_req, res) => {

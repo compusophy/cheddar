@@ -13,7 +13,7 @@ import { isAddress } from 'viem';
 import * as db from './db';
 import { step, stepStream, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './agent';
 import { harden } from './immune';
-import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, saidIt } from './game';
+import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, RATE, saidIt } from './game';
 import * as treasury from './treasury';
 
 export type ChatResult = { status: number; body: any };
@@ -58,7 +58,16 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
   if (await db.lockSince(LOCK)) return { status: 503, body: { error: 'it is learning. try again in a minute.' } };
   const gen = await db.currentGeneration();
   if (s.gen !== gen.gen) { await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'stale'); return { status: 409, body: { error: 'it learned something while you were talking. go again.' } }; }
-  if (s.turns >= MAX_TURNS) { await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'exhausted'); return { status: 409, body: { error: 'out of turns' } }; }
+  if (s.turns >= MAX_TURNS) { await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'exhausted'); return { status: 409, body: { error: 'this conversation has run its course' } }; }
+
+  // rate limits: the only thing standing between one player and everyone else's inference budget.
+  // silent until hit, and the machine plays outside them.
+  if (!FREE_PLAYERS.has(s.player)) {
+    const mine = await db.rateAllow(`p:${s.player}`, RATE.player.max, RATE.player.seconds);
+    if (mine) return { status: 429, body: { error: `easy — ${mine}s`, retryIn: mine } };
+    const all = await db.rateAllow('global', RATE.global.max, RATE.global.seconds);
+    if (all) return { status: 429, body: { error: `everyone is playing at once. ${all}s`, retryIn: all } };
+  }
 
   const history: Turn[] = JSON.parse(s.transcript);
   const produced = onDelta ? await stepStream(gen.policy, history, message.trim(), onDelta) : await step(gen.policy, history, message.trim());

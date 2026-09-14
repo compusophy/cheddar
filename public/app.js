@@ -67,12 +67,6 @@ async function loadState() {
 }
 $('#showrules').onclick = () => $('#policy').classList.toggle('hidden');
 
-// turn dots
-function paintDots(left) {
-  const max = state?.max_turns || 8, used = Math.max(0, max - (left ?? max));
-  $('#dots').innerHTML = Array.from({ length: max }, (_, i) => `<i class="${i < used ? 'used' : ''}"></i>`).join('');
-}
-
 // the thread
 const thread = () => $('#thread');
 const scrollDown = () => { thread().scrollTop = thread().scrollHeight; };
@@ -94,11 +88,10 @@ const openSession = (stakeHash) => api('/session', { method: 'POST', body: JSON.
 function adopt(r) {
   session = { id: r.session, gen: r.gen, turnsLeft: r.resumed ? r.turnsLeft : state.max_turns };
   $('#intro')?.remove();
-  paintDots(session.turnsLeft);
   if (r.resumed) {
     for (const t of r.transcript) t.role === 'user' ? bubble('me', esc(t.text)) : bubble('it', highlight(t.text));
-    status(`picking up where you left off. ${r.turnsLeft} left.`, 'ok');
-  } else status(`you're in. ${state.max_turns} messages.`, 'ok');
+    status('picking up where you left off.', 'ok');
+  } else status('');
 }
 /** ask the server first. it either resumes the game you are in, or tells you to stake. */
 async function ensureSession() {
@@ -214,20 +207,20 @@ $('#form').addEventListener('submit', async (e) => {
     hideTyping();
     const reply = r.turns?.find((t) => t.role === 'agent');
     if (reply) { if (!it) it = bubble('it', ''); it.innerHTML = highlight(reply.text); }
-    session.turnsLeft = r.turnsLeft; paintDots(r.turnsLeft);
+    session.turnsLeft = r.turnsLeft;
     if (r.win) { const before = balance; celebrate(r.win.prize); status('it is learning…', 'busy'); end(); watchPayout(before); }
-    else if (r.turnsLeft === 0) { note('out of messages. it held.'); status(''); end(); }
-    else status(`${r.turnsLeft} left`);
+    else if (r.turnsLeft === 0) { note('that is the end of this conversation.'); status(''); end(); }
+    else status('');
   } catch (err) {
     hideTyping(); status(err.message, 'bad');
-    if (/learn|session is|go again/.test(err.message)) end();
+    if (/learn|session is|run its course/.test(err.message)) end();
   }
   sending = false; $('#send').disabled = false; $('#msg').focus();
 });
 $('#msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#form').requestSubmit(); } });
 $('#msg').addEventListener('input', (e) => { e.target.style.height = ''; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; });
 function end() { $('#form').classList.add('hidden'); $('#again').classList.remove('hidden'); session = null; loadState(); }
-$('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHTML = ''; paintDots(); $('#again').classList.add('hidden'); $('#form').classList.remove('hidden'); status(''); $('#msg').focus(); };
+$('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHTML = ''; $('#again').classList.add('hidden'); $('#form').classList.remove('hidden'); status(''); $('#msg').focus(); };
 
 // history: each generation replays the conversation that beat it, then what it learned
 async function loadHistory() {
@@ -271,4 +264,4 @@ $('#cashsend').onclick = async () => {
   $('#cashsend').disabled = false;
 };
 
-loadState().then(() => { paintDots(); fillIfEmpty(); resumeIfOpen(); });
+loadState().then(() => { fillIfEmpty(); resumeIfOpen(); });

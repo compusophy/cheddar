@@ -1,7 +1,7 @@
 import { GoogleGenAI, type Content } from '@google/genai';
 
 export const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-export const MAX_TURNS = 8;
+export const MAX_TURNS = 25; // a cost ceiling per stake, never shown as a score
 export const MAX_MESSAGE_CHARS = 500;
 
 let ai: GoogleGenAI | null = null;

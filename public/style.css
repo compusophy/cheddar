@@ -53,10 +53,6 @@ header { display: flex; align-items: stretch; border-bottom: 1px solid var(--lin
 @keyframes breathe { 50% { opacity: .4; } }
 .rules { margin-left: auto !important; background: none; border: none; color: var(--dim); cursor: pointer; }
 .rules:hover { color: var(--fg); }
-.dots { display: inline-flex; }
-.dots i { width: var(--h); height: var(--h); background: var(--gold); transition: background .3s; }
-.dots i + i { margin-left: var(--h); }
-.dots i.used { background: var(--line); }
 .policy { padding: var(--u); border-bottom: 1px solid var(--line); background: var(--panel); color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto; flex: none; }
 
 /* the thread: --h between messages from one side, --u when the speaker changes */
@@ -89,6 +85,7 @@ header { display: flex; align-items: stretch; border-bottom: 1px solid var(--lin
 .claim input { flex: 1; min-width: 0; background: var(--bg); border: none; padding: var(--u); }
 .claim button { padding: var(--u); border: none; border-left: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 600; cursor: pointer; }
 
+.status:empty { display: none; }
 .status { padding: var(--u); color: var(--dim); text-align: center; border-top: 1px solid var(--line); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: none; }
 .status.busy { color: var(--gold); }
 .status.ok { color: var(--green); }
