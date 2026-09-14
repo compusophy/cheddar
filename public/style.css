@@ -35,7 +35,9 @@ b { font-weight: 700; }
 /* bars: every one is --row tall. a bar is a row of full-height cells, each padded --u. */
 header { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex: none; }
 .strip { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex: none; }
-.cell { display: flex; align-items: center; padding: var(--u); background: none; border: none; cursor: pointer; }
+/* every cell is at least one column wide: ten characters plus its padding. because the font is
+   monospaced this is an exact measure, so the dividers line up down the whole page. */
+.cell { display: flex; align-items: center; padding: var(--u); min-width: calc(10ch + var(--u) * 2); background: none; border: none; cursor: pointer; }
 .cell + .cell, .purse, #send { border-left: 1px solid var(--line); }
 .cell { user-select: none; -webkit-tap-highlight-color: transparent; }
 button.cell:active { background: var(--fg); color: var(--bg); }

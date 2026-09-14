@@ -6,7 +6,7 @@ import path from 'path';
 import { isAddress, verifyMessage } from 'viem';
 import * as db from './db';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
-import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED } from './game';
+import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED, GRANT, GRANTS_PER_DAY } from './game';
 import { openSession, runChat, peek, abandon, resumeHardening } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
@@ -33,7 +33,7 @@ app.get('/api/state', async (_req, res) => {
   const phase = await db.lockPhase('harden');
   res.json({
     gen: gen.gen, policy: gen.policy, learning: phase ? { phase: /^\d+$/.test(phase) ? 'reading the conversation that beat it' : phase } : null,
-    word: WORD, stake: STAKE, jackpot: await db.jackpot(), seed: JACKPOT_SEED, share: JACKPOT_SHARE,
+    word: WORD, stake: STAKE, grant: GRANT, jackpot: await db.jackpot(), seed: JACKPOT_SEED, share: JACKPOT_SHARE,
     house: treasury.agentAddress, token: treasury.PATH_USD, rpc: treasury.TEMPO_RPC, chain: 42431,
     max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
     machine: await db.machinePulse(),
@@ -108,15 +108,20 @@ app.post('/api/name', async (req, res) => {
   res.json({ ok: true, nickname: clean || null });
 });
 
-/** testnet: fill a purse from the faucet so a first game can be staked. */
+/**
+ * the welcome grant. a brand new purse is given a small amount from the house so the first few games
+ * are free: once per purse, only a purse that has never staked, and the house hands out a bounded
+ * number a day. the raw testnet faucet is never pointed at a player, because a million play dollars
+ * makes the stake meaningless and the money feel fake.
+ */
 app.post('/api/faucet', async (req, res) => {
   const { address } = req.body || {};
   if (!address || !isAddress(address)) return res.status(400).json({ error: 'bad purse' });
-  // once per purse, and only a purse that has never staked: a first game, not a spigot.
-  if (await db.faucetSeen(address) || await db.hasEverStaked(address)) return res.status(429).json({ error: 'already filled' });
+  if (await db.faucetSeen(address) || await db.hasEverStaked(address)) return res.status(429).json({ error: 'already given' });
+  if (await db.rateAllow('grant', GRANTS_PER_DAY, 86400)) return res.status(429).json({ error: 'the house has given out enough today' });
   await db.markFaucet(address);
-  const r = await treasury.faucet(address);
-  res.status(r.status < 500 ? 200 : r.status).json({ ok: r.status < 400 });
+  const r = await treasury.pay(address, String(GRANT));
+  res.json({ ok: r.ok });
 });
 
 app.get('/api/bot/tick', async (req, res) => {

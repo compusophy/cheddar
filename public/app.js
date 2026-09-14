@@ -32,7 +32,7 @@ function paintBalance(withPop) { $('#bal').textContent = money(balance); $('#cas
 async function fillIfEmpty() {
   await readBalance();
   if (balance >= (state?.stake || 0.25)) return paintBalance(false);
-  status('getting you some money…', 'busy');
+  status(`a welcome ${money(state?.grant ?? 1)} for your first games…`, 'busy');
   try { await api('/faucet', { method: 'POST', body: JSON.stringify({ address: purse.address }) }); } catch {}
   for (let i = 0; i < 8 && balance < (state?.stake || 0.25); i++) { await sleep(2000); await readBalance(); }
   paintBalance(balance > 0); status('');
