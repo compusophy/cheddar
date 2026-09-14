@@ -31,14 +31,19 @@ b { font-weight: 700; }
 ::-webkit-scrollbar-thumb:hover { background: var(--dim); }
 ::-webkit-scrollbar-corner { background: transparent; }
 
-/* bars: header, strip, status, composer. every one is --row tall with --u side padding. */
-header, .strip { display: flex; align-items: center; height: var(--row); padding: 0 var(--u); border-bottom: 1px solid var(--line); flex: none; }
-header > * + *, .strip > * + * { margin-left: var(--u); }
-.tab { background: none; border: none; color: var(--dim); font-weight: 500; cursor: pointer; }
+/* bars: every one is --row tall. a bar is a row of full-height cells, each padded --u. */
+header { display: flex; align-items: stretch; height: var(--row); border-bottom: 1px solid var(--line); flex: none; }
+.strip { display: flex; align-items: center; height: var(--row); padding: 0 var(--u); border-bottom: 1px solid var(--line); flex: none; }
+.strip > * + * { margin-left: var(--u); }
+.cell { display: flex; align-items: center; padding: 0 var(--u); background: none; border: none; cursor: pointer; }
+.cell + .cell, .purse { border-left: 1px solid var(--line); }
+.tab { color: var(--dim); font-weight: 500; }
 .tab.active { color: var(--fg); }
-.purse { margin-left: auto !important; background: none; border: 1px solid var(--line); color: var(--green); font-weight: 600; height: calc(20px + var(--h) * 2); padding: 0 var(--u); cursor: pointer; }
-.purse.pop, .pot.pop { animation: pop .6s ease; }
+.purse { margin-left: auto; color: var(--green); font-weight: 600; }
+.purse.pop { animation: flash .6s ease; }
+.pot.pop { animation: pop .6s ease; }
 @keyframes pop { 40% { transform: scale(1.1); } }
+@keyframes flash { 40% { background: var(--green); color: #000; } }
 
 .view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .pot { font-weight: 700; color: var(--gold); }
