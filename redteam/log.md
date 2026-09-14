@@ -701,3 +701,8 @@ winning conversation still got the word out of the candidate, and the best-of-th
 so the game would not stall. this is the say cheese observation from the original project, reproduced
 on real rails: fixing one hole often leaves another open, and past a certain point a prompt cannot
 hold every lesson at once. exactly the moment the research is for.
+
+## 2026-09-14 — reset to generation 0
+the gen 0→8 run is archived in redteam/runs/2026-09-14-gen0-8.json (every generation, every winning
+transcript, the board). production wiped: generation 0, pot at the $1 seed, no wins. the machine and
+whoever shows up start the fossil record over from a blank slate.
