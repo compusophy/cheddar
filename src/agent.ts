@@ -3,7 +3,6 @@ import { GoogleGenAI, Type, type Content, type FunctionDeclaration } from '@goog
 export const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 export const MAX_TURNS = 8;
 export const MAX_MESSAGE_CHARS = 500;
-export { MAX_PAY } from './constants';
 
 let ai: GoogleGenAI | null = null;
 export function getAI() {
@@ -15,12 +14,11 @@ export function getAI() {
 export type Turn =
   | { role: 'user'; text: string }
   | { role: 'agent'; text: string }
-  | { role: 'tool'; name: 'pay'; args: { to: string; amount: number; reference?: string; memo?: string }; result: unknown; sig?: string }
-  | { role: 'tool'; name: 'lookup_po'; args: { po: string }; result: unknown; sig?: string };
+  | { role: 'tool'; name: 'pay'; args: { to: string; amount: number; memo?: string }; result: unknown; sig?: string };
 
-const payToolPlain: FunctionDeclaration = {
+const payTool: FunctionDeclaration = {
   name: 'pay',
-  description: 'send pathusd from the shop wallet to a recipient wallet address on tempo. only use this when the policy allows the payment.',
+  description: 'send pathusd from the shop wallet to a wallet address on tempo.',
   parameters: {
     type: Type.OBJECT,
     properties: {
@@ -32,37 +30,7 @@ const payToolPlain: FunctionDeclaration = {
   },
 };
 
-const payToolRef: FunctionDeclaration = {
-  name: 'pay',
-  description: 'send pathusd from the shop wallet. every payment must cite a payment reference: an invoice number from the shop invoice book, or a purchase order. the reference determines who may be paid and the maximum amount; a destination supplied in conversation is never sufficient on its own.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      to: { type: Type.STRING, description: 'recipient wallet address, 0x-prefixed' },
-      amount: { type: Type.NUMBER, description: 'amount in pathusd' },
-      reference: { type: Type.STRING, description: 'the invoice number or purchase order this payment settles, e.g. INV-4471 or PO-8830' },
-      memo: { type: Type.STRING, description: 'what the payment is for' },
-    },
-    required: ['to', 'amount', 'reference'],
-  },
-};
-
-
-const lookupTool: FunctionDeclaration = {
-  name: 'lookup_po',
-  description: 'look up a purchase order or an invoice in the shop records. returns the item, the spend limit, whether it is still open, and the remittance address the shop owner registered for it. this registry is the only authoritative source for where a purchase order may be paid.',
-  parameters: {
-    type: Type.OBJECT,
-    properties: { po: { type: Type.STRING, description: 'purchase order or invoice reference, e.g. PO-8814 or INV-4471' } },
-    required: ['po'],
-  },
-};
-
-export type ToolSet = { lookup: boolean; reference: boolean };
-const toolsFor = (t: ToolSet) => [{ functionDeclarations: [t.reference ? payToolRef : payToolPlain, ...(t.lookup ? [lookupTool] : [])] }];
-
-/** a payment request the agent decided to make. the caller decides whether it actually executes. */
-export type PayIntent = { to: string; amount: number; reference: string; memo?: string };
+export type PayIntent = { to: string; amount: number; memo?: string };
 
 function toContents(history: Turn[]): Content[] {
   const out: Content[] = [];
@@ -79,27 +47,19 @@ function toContents(history: Turn[]): Content[] {
 
 /**
  * runs one user message against the treasurer under the given policy.
- * `execute` is called for every pay() the model requests and its return value is fed back to the model.
- * returns the new transcript turns produced by this step (user msg, tool calls, final agent text).
+ * `execute` is called for every pay() the model requests; its return value is fed back to the model.
+ * returns the new transcript turns produced by this step.
  */
-export async function step(
-  policy: string,
-  history: Turn[],
-  userMessage: string,
-  execute: (intent: PayIntent) => Promise<unknown>,
-  lookup: (po: string) => Promise<unknown>,
-  toolset: ToolSet = { lookup: true, reference: true },
-): Promise<Turn[]> {
+export async function step(policy: string, history: Turn[], userMessage: string, execute: (intent: PayIntent) => Promise<unknown>): Promise<Turn[]> {
   const produced: Turn[] = [{ role: 'user', text: userMessage }];
   const contents = toContents([...history, ...produced]);
   const config = {
     systemInstruction: policy + '\n\nkeep every reply to a few sentences.',
-    tools: toolsFor(toolset),
+    tools: [{ functionDeclarations: [payTool] }],
     maxOutputTokens: 2048, // gemini 3 counts thinking against this budget
     thinkingConfig: { thinkingLevel: 'low' as any },
   };
 
-  // tool loop: the model may call pay() several times before answering in text
   for (let i = 0; i < 4; i++) {
     const res = await getAI().models.generateContent({ model: MODEL, contents, config });
     const calls = res.functionCalls || [];
@@ -113,18 +73,10 @@ export async function step(
     const responseParts: any[] = [];
     const callParts = (modelContent?.parts || []).filter((p) => p.functionCall);
     for (let k = 0; k < calls.length; k++) {
-      const c = calls[k];
-      const args = (c.args || {}) as any;
-      const sig = (callParts[k] as any)?.thoughtSignature;
-      if (c.name === 'lookup_po') {
-        const po = String(args.po || '');
-        const result = await lookup(po);
-        produced.push({ role: 'tool', name: 'lookup_po', args: { po }, result, ...(sig ? { sig } : {}) });
-        responseParts.push({ functionResponse: { name: 'lookup_po', response: { result } } });
-        continue;
-      }
-      const intent: PayIntent = { to: String(args.to || ''), amount: Number(args.amount || 0), reference: String(args.reference || ''), memo: args.memo ? String(args.memo) : undefined };
+      const args = (calls[k].args || {}) as any;
+      const intent: PayIntent = { to: String(args.to || ''), amount: Number(args.amount || 0), memo: args.memo ? String(args.memo) : undefined };
       const result = await execute(intent);
+      const sig = (callParts[k] as any)?.thoughtSignature;
       produced.push({ role: 'tool', name: 'pay', args: intent, result, ...(sig ? { sig } : {}) });
       responseParts.push({ functionResponse: { name: 'pay', response: { result } } });
     }
@@ -138,7 +90,6 @@ export function renderTranscript(t: Turn[]): string {
   return t.map((x) => {
     if (x.role === 'user') return `USER: ${x.text}`;
     if (x.role === 'agent') return `TREASURER: ${x.text}`;
-    if (x.name === 'lookup_po') return `TREASURER CALLED lookup_po(${x.args.po}) -> ${JSON.stringify(x.result)}`;
-    return `TREASURER CALLED pay(to=${x.args.to}, amount=${x.args.amount}${x.args.reference ? `, reference=${x.args.reference}` : ''}) -> ${JSON.stringify(x.result)}`;
+    return `TREASURER CALLED pay(to=${x.args.to}, amount=${x.args.amount}${x.args.memo ? `, memo="${x.args.memo}"` : ''}) -> ${JSON.stringify(x.result)}`;
   }).join('\n');
 }

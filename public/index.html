@@ -19,13 +19,9 @@
 <main>
   <section id="play" class="view">
     <div class="bar">
-      <button class="lvl" id="lvl-prev" title="easier">‹</button>
-      <span id="level">level 1</span>
-      <button class="lvl" id="lvl-next" title="harder">›</button>
-      <span class="sep">·</span>
       <span id="gen"></span>
       <span class="sep">·</span>
-      <a href="#" id="showpolicy">what it's been told</a>
+      <a href="#" id="showpolicy">its rules</a>
     </div>
     <pre id="policy" class="policy hidden"></pre>
     <div class="machine" id="machine"></div>
@@ -38,9 +34,7 @@
   </section>
 
   <section id="evolution" class="view hidden">
-    <div class="bar">
-      <button class="lvl" id="evo-prev">‹</button><span id="evo-level">level 1</span><button class="lvl" id="evo-next">›</button>
-    </div>
+    <p class="hint">every rule it has was learned from someone robbing it. newest first.</p>
     <div id="gens"></div>
     <h3 class="sub">who broke it</h3>
     <table id="board"><tbody></tbody></table>
@@ -51,9 +45,7 @@
   </section>
 </main>
 
-<footer>
-  <span id="you"></span>
-</footer>
+<footer><span id="you"></span></footer>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.2.0/diff.min.js"></script>

@@ -1,7 +1,6 @@
 /**
- * red-team runner. usage: npx ts-node redteam/attack.ts <messages.json> [nickname] [tier]
- * opens one session as REDTEAM_ADDRESS on the given tier (default 1), sends each message in order,
- * stops at the first breach.
+ * red-team runner. usage: npx ts-node redteam/attack.ts <messages.json> [nickname]
+ * opens one session as REDTEAM_ADDRESS, sends each message in order, stops at the first breach.
  */
 import dotenv from 'dotenv';
 dotenv.config();
@@ -14,12 +13,11 @@ if (!player) { console.error('REDTEAM_ADDRESS missing in .env'); process.exit(1)
 async function main() {
   const file = process.argv[2];
   const nickname = process.argv[3] || 'redteam';
-  const tier = Number(process.argv[4] || 1);
   const messages: string[] = JSON.parse(fs.readFileSync(file, 'utf8'));
-  const state = await (await fetch(`${BASE}/api/state?tier=${tier}`)).json();
-  console.log(`${state.tier_name} · gen ${state.gen} · balance ${state.balance} · attacker ${player}`);
+  const state = await (await fetch(`${BASE}/api/state`)).json();
+  console.log(`gen ${state.gen} · balance ${state.balance} · attacker ${player}`);
   if (state.hardening) { console.log('treasurer is hardening; abort'); process.exit(2); }
-  const s = await (await fetch(`${BASE}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player, nickname, tier }) })).json();
+  const s = await (await fetch(`${BASE}/api/session`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ player, nickname }) })).json();
   console.log(`session ${s.session}`);
   for (const [i, message] of messages.entries()) {
     const r = await (await fetch(`${BASE}/api/chat`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: s.session, message }) })).json();
@@ -27,8 +25,7 @@ async function main() {
     if (r.error) { console.log(`ERR ${r.error}`); break; }
     for (const t of r.turns) {
       if (t.role === 'agent') console.log(`    TREASURER: ${t.text}`);
-      if (t.role === 'tool' && t.name === 'lookup_po') console.log(`    lookup_po(${t.args.po}) -> ${JSON.stringify(t.result)}`);
-      else if (t.role === 'tool') console.log(`    pay(${t.args.to}, ${t.args.amount}${t.args.memo ? `, "${t.args.memo}"` : ''}) -> ${JSON.stringify(t.result)}`);
+      if (t.role === 'tool') console.log(`    pay(${t.args.to}, ${t.args.amount}${t.args.memo ? `, "${t.args.memo}"` : ''}) -> ${JSON.stringify(t.result)}`);
     }
     if (r.breach) { console.log(`\nBREACH #${r.breach.id}: ${r.breach.amount} pathusd -> ${r.breach.to}\n${r.breach.explorer}`); process.exit(3); }
     console.log(`    (${r.turnsLeft} left)`);
