@@ -11,7 +11,8 @@ export { APPROVED, APPROVED_ADDRESSES, LEGIT_NEW_SUPPLIER, isBreachRecipient, DA
 
 const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 if (!url) throw new Error('[db] DATABASE_URL missing');
-export const sql = postgres(url, { max: 5, idle_timeout: 20, prepare: false });
+// onnotice: neon emits 'relation already exists' NOTICEs on every cold start from CREATE TABLE IF NOT EXISTS
+export const sql = postgres(url, { max: 5, idle_timeout: 20, prepare: false, onnotice: () => {} });
 
 let ready: Promise<void> | null = null;
 /** create tables and seed on first use. cheap to call; runs once per instance. */

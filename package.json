@@ -7,7 +7,8 @@
     "start": "ts-node src/server.ts",
     "dev": "ts-node src/server.ts",
     "keygen": "ts-node scripts/keygen.ts",
-    "reset": "ts-node scripts/reset.ts"
+    "reset": "ts-node scripts/reset.ts",
+    "test": "ts-node scripts/test.ts"
   },
   "dependencies": {
     "@google/genai": "^1.46.0",
