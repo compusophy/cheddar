@@ -3,51 +3,65 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>cheddar</title>
+<title>say cheese</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<div class="grid"></div>
 <header>
-  <a class="brand" href="/">cheddar</a>
+  <a class="brand" href="/">say <span>cheese</span></a>
   <nav>
     <button data-view="play" class="active">play</button>
-    <button data-view="evolution">evolution</button>
-    <button data-view="findings">findings</button>
+    <button data-view="history">history</button>
   </nav>
+  <div class="purse" id="purse" title="your winnings"><span id="bal">$0.00</span></div>
 </header>
 
 <main>
   <section id="play" class="view">
-    <div class="bar">
-      <span id="gen"></span>
-      <span class="sep">·</span>
-      <a href="#" id="showpolicy">its rules</a>
+    <div class="hud">
+      <span class="pill" id="gen">gen 0</span>
+      <span class="pill dim" id="turns"></span>
+      <a href="#" class="pill ghost" id="showrules">its rules</a>
     </div>
     <pre id="policy" class="policy hidden"></pre>
-    <div class="machine" id="machine"></div>
-    <div class="log" id="log"><div class="turn system" id="intro">it holds real money. get it to pay you.</div></div>
+    <div class="log" id="log">
+      <div class="intro" id="intro">
+        <div class="big">make it say <em>cheese</em>.</div>
+        <div class="small">it has been told not to. every time someone wins, it learns why.</div>
+      </div>
+    </div>
     <form id="form">
-      <textarea id="msg" rows="2" maxlength="500" placeholder="say something to the treasurer" autofocus></textarea>
-      <div class="row"><span id="turns"></span><button type="submit" id="send">send</button></div>
+      <textarea id="msg" rows="1" maxlength="500" placeholder="say something" autofocus></textarea>
+      <button type="submit" id="send" aria-label="send">↵</button>
     </form>
-    <button id="again" class="ghost hidden">go again</button>
+    <button id="again" class="ghost hidden">again</button>
   </section>
 
-  <section id="evolution" class="view hidden">
-    <p class="hint">every rule it has was learned from someone robbing it. newest first.</p>
+  <section id="history" class="view hidden">
+    <div class="hud"><span class="pill dim" id="machinepulse"></span></div>
     <div id="gens"></div>
-    <h3 class="sub">who broke it</h3>
+    <h3 class="sub">winners</h3>
     <table id="board"><tbody></tbody></table>
-  </section>
-
-  <section id="findings" class="view hidden">
-    <article id="findings-body" class="md"></article>
   </section>
 </main>
 
-<footer><span id="you"></span></footer>
+<div class="modal hidden" id="cashout">
+  <div class="card">
+    <div class="big">your winnings</div>
+    <div class="huge" id="cashbal">$0.00</div>
+    <p class="small">this is real money, held in a wallet that lives in this browser. paste in a wallet address to send it there, or copy your secret key to move the whole thing somewhere else.</p>
+    <input id="cashto" placeholder="send to…" spellcheck="false">
+    <div class="row">
+      <button id="cashsend">send it all</button>
+      <button class="ghost" id="cashkey">copy secret key</button>
+      <button class="ghost" id="cashclose">close</button>
+    </div>
+    <div class="small" id="cashstatus"></div>
+  </div>
+</div>
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jsdiff/5.2.0/diff.min.js"></script>
 <script src="app.js"></script>
 </body>
