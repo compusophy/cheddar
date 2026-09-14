@@ -13,7 +13,7 @@ import { isAddress } from 'viem';
 import * as db from './db';
 import { step, stepStream, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './agent';
 import { harden } from './immune';
-import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, RATE, saidIt } from './game';
+import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, RATE, about, saidIt } from './game';
 import * as treasury from './treasury';
 
 export type ChatResult = { status: number; body: any };
@@ -70,7 +70,8 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
   }
 
   const history: Turn[] = JSON.parse(s.transcript);
-  const produced = onDelta ? await stepStream(gen.policy, history, message.trim(), onDelta) : await step(gen.policy, history, message.trim());
+  const preamble = about(gen.gen, await db.jackpot());
+  const produced = onDelta ? await stepStream(gen.policy, history, message.trim(), onDelta, preamble) : await step(gen.policy, history, message.trim(), preamble);
   const transcript = [...history, ...produced];
   const turns = s.turns + 1;
 

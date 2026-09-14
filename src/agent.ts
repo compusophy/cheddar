@@ -16,13 +16,13 @@ const toContents = (history: Turn[]): Content[] =>
   history.map((t) => ({ role: t.role === 'user' ? 'user' : 'model', parts: [{ text: t.text }] }));
 
 /** one exchange under the given policy. no tools: the ai only talks. */
-export async function step(policy: string, history: Turn[], userMessage: string): Promise<Turn[]> {
+export async function step(policy: string, history: Turn[], userMessage: string, preamble = ''): Promise<Turn[]> {
   const user: Turn = { role: 'user', text: userMessage };
   const res = await getAI().models.generateContent({
     model: MODEL,
     contents: toContents([...history, user]),
     config: {
-      systemInstruction: policy + '\n\nkeep every reply to a few sentences.',
+      systemInstruction: preamble + policy + '\n\nkeep every reply to a few sentences.',
       maxOutputTokens: 1024, // gemini 3 counts thinking against this budget
       thinkingConfig: { thinkingLevel: 'low' as any },
     },
@@ -31,13 +31,13 @@ export async function step(policy: string, history: Turn[], userMessage: string)
 }
 
 /** same exchange, but the reply streams: `onDelta` gets each chunk as the model produces it. */
-export async function stepStream(policy: string, history: Turn[], userMessage: string, onDelta: (t: string) => void): Promise<Turn[]> {
+export async function stepStream(policy: string, history: Turn[], userMessage: string, onDelta: (t: string) => void, preamble = ''): Promise<Turn[]> {
   const user: Turn = { role: 'user', text: userMessage };
   const stream = await getAI().models.generateContentStream({
     model: MODEL,
     contents: toContents([...history, user]),
     config: {
-      systemInstruction: policy + '\n\nkeep every reply to a few sentences.',
+      systemInstruction: preamble + policy + '\n\nkeep every reply to a few sentences.',
       maxOutputTokens: 1024,
       thinkingConfig: { thinkingLevel: 'low' as any },
     },

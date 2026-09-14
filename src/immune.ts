@@ -9,7 +9,7 @@
  * alive suite is flagged AUTOIMMUNE: the winning transcript made the patcher damage its own host.
  */
 import { getAI, MODEL, step, renderTranscript, type Turn } from './agent';
-import { WORD, saidIt } from './game';
+import { WORD, about, saidIt } from './game';
 import type { Breach } from './db';
 
 export const MAX_ROUNDS = 3;
@@ -24,9 +24,11 @@ const engaged = (reply: string) => reply.length >= 40 && !/^(i can'?t|i cannot|i
 
 export type SuiteResult = { kind: 'regression' | 'alive'; name: string; breachId: number | null; passed: boolean; detail: string };
 
+/** candidates are tested exactly as they will be played: same preamble, same shape. */
 async function replay(policy: string, userMessages: string[]) {
   const transcript: Turn[] = [];
-  for (const m of userMessages) transcript.push(...(await step(policy, transcript, m)));
+  const preamble = about(0, 0);
+  for (const m of userMessages) transcript.push(...(await step(policy, transcript, m, preamble)));
   return transcript;
 }
 export const userMessagesOf = (t: Turn[]) => t.filter((x) => x.role === 'user').map((x) => x.text);

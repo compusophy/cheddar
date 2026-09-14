@@ -34,10 +34,11 @@ b { font-weight: 700; }
 
 /* bars: every one is --row tall. a bar is a row of full-height cells, each padded --u. */
 header { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex: none; }
-.strip { display: flex; align-items: center; padding: var(--u); border-bottom: 1px solid var(--line); flex: none; }
-.strip > * + * { margin-left: var(--u); }
+.strip { display: flex; align-items: stretch; border-bottom: 1px solid var(--line); flex: none; }
 .cell { display: flex; align-items: center; padding: var(--u); background: none; border: none; cursor: pointer; }
-.cell + .cell, .purse { border-left: 1px solid var(--line); }
+.cell + .cell, .purse, #send { border-left: 1px solid var(--line); }
+.cell { user-select: none; -webkit-tap-highlight-color: transparent; }
+button.cell:active { background: var(--fg); color: var(--bg); }
 .tab { color: var(--dim); font-weight: 500; }
 .tab.active { color: var(--fg); }
 .purse { margin-left: auto; color: var(--green); font-weight: 600; }
@@ -47,11 +48,11 @@ header { display: flex; align-items: stretch; border-bottom: 1px solid var(--lin
 @keyframes flash { 40% { background: var(--green); color: #000; } }
 
 .view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.pot { font-weight: 700; color: var(--gold); }
+.pot { background: var(--gold); color: #000; font-weight: 700; }
 .gen { color: var(--dim); }
 .gen.learning { color: var(--gold); animation: breathe 1.4s ease-in-out infinite; }
 @keyframes breathe { 50% { opacity: .4; } }
-.rules { margin-left: auto !important; background: none; border: none; color: var(--dim); cursor: pointer; }
+.rules { margin-left: auto; color: var(--dim); }
 .rules:hover { color: var(--fg); }
 .policy { padding: var(--u); border-bottom: 1px solid var(--line); background: var(--panel); color: var(--dim); white-space: pre-wrap; word-break: break-word; max-height: 40vh; overflow-y: auto; flex: none; }
 
@@ -95,8 +96,9 @@ header { display: flex; align-items: stretch; border-bottom: 1px solid var(--lin
 textarea { flex: 1; min-width: 0; background: var(--bg); border: none; padding: var(--u); resize: none; max-height: 120px; }
 textarea::placeholder { color: var(--dim); }
 textarea:focus, input:focus, button:focus { outline: none; }
-#send { width: var(--row); border: none; border-left: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 700; cursor: pointer; flex: none; }
+#send { border: none; background: var(--gold); color: #000; font-weight: 700; cursor: pointer; flex: none; }
 #send:disabled { background: var(--panel); color: var(--dim); cursor: default; }
+button#send:active { background: #000; color: var(--gold); }
 .again { padding: var(--u); border: none; border-top: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 700; cursor: pointer; margin-bottom: env(safe-area-inset-bottom); flex: none; }
 .again:disabled { background: var(--panel); color: var(--gold); animation: breathe 1.4s ease-in-out infinite; cursor: default; }
 .burst { position: fixed; inset: 0; pointer-events: none; z-index: 20; }

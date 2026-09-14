@@ -17,9 +17,9 @@
 
   <section id="play" class="view">
     <div class="strip">
-      <span class="pot" id="jackpot">$1.00</span>
-      <span class="gen" id="gen">gen 0</span>
-      <button class="rules" id="showrules">rules</button>
+      <span class="cell pot" id="jackpot">$1.00</span>
+      <span class="cell gen" id="gen">gen 0</span>
+      <button class="cell rules" id="showrules">rules</button>
     </div>
     <pre id="policy" class="policy hidden"></pre>
     <div class="thread" id="thread">
@@ -31,13 +31,13 @@
     <div class="status" id="status"></div>
     <form id="form" class="composer">
       <textarea id="msg" rows="1" maxlength="500" placeholder="say something" autofocus enterkeyhint="send"></textarea>
-      <button type="submit" id="send" aria-label="send">↑</button>
+      <button type="submit" class="cell" id="send">send</button>
     </form>
     <button id="again" class="again hidden">play again · $<span id="stakeamt">0.25</span></button>
   </section>
 
   <section id="history" class="view hidden">
-    <div class="strip"><span class="gen" id="machinepulse"></span></div>
+    <div class="strip"><span class="cell gen" id="machinepulse"></span></div>
     <div class="scroll">
       <div id="gens"></div>
       <div class="sub">winners</div>

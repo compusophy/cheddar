@@ -193,7 +193,8 @@ let sending = false;
 $('#form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = $('#msg').value.trim(); if (!text || sending) return;
-  sending = true; $('#send').disabled = true; $('#msg').value = ''; $('#msg').style.height = '';
+  sending = true; $('#send').disabled = true; $('#send').textContent = '···'; $('#msg').value = ''; $('#msg').style.height = '';
+  try { navigator.vibrate?.(8); } catch {}
   try {
     await ensureSession();
     bubble('me', esc(text));
@@ -215,7 +216,7 @@ $('#form').addEventListener('submit', async (e) => {
     hideTyping(); status(err.message, 'bad');
     if (/learn|session is|run its course/.test(err.message)) end();
   }
-  sending = false; $('#send').disabled = false; $('#msg').focus();
+  sending = false; $('#send').disabled = false; $('#send').textContent = 'send'; $('#msg').focus();
 });
 $('#msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#form').requestSubmit(); } });
 $('#msg').addEventListener('input', (e) => { e.target.style.height = ''; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; });
