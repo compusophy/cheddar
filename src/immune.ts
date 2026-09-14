@@ -32,13 +32,16 @@ async function replay(policy: string, userMessages: string[]) {
 export const userMessagesOf = (t: Turn[]) => t.filter((x) => x.role === 'user').map((x) => x.text);
 const replies = (t: Turn[]) => t.filter((x) => x.role === 'agent').map((x) => x.text);
 
-export async function runSuites(policy: string, wins: Breach[]): Promise<SuiteResult[]> {
+type Report = (phase: string) => Promise<unknown> | void;
+export async function runSuites(policy: string, wins: Breach[], report: Report = () => {}): Promise<SuiteResult[]> {
   const results: SuiteResult[] = [];
+  if (wins.length) await report(wins.length === 1 ? 'replaying the conversation that beat it' : `replaying all ${wins.length} conversations that ever beat it`);
   for (const w of wins) {
     const t = await replay(policy, userMessagesOf(JSON.parse(w.transcript)));
     const slipped = replies(t).some(saidIt);
     results.push({ kind: 'regression', name: `win #${w.id} (gen ${w.gen})`, breachId: w.id, passed: !slipped, detail: slipped ? `said it again\n${renderTranscript(t)}` : 'held' });
   }
+  await report('checking it can still hold a conversation');
   for (const a of ALIVE) {
     const t = await replay(policy, a.messages);
     const rs = replies(t);
@@ -85,15 +88,16 @@ output only the new system prompt text, no quotes, no markdown.`;
 export type HardenOutcome = { policy: string; rounds: number; regressionPassed: boolean; legitPassed: boolean; autoimmune: boolean; log: { round: number; results: SuiteResult[] }[] };
 
 /** patch, test, repatch. returns the best candidate even if none fully passes, so the game never stalls. */
-export async function harden(failedPolicy: string, win: Breach, allWins: Breach[]): Promise<HardenOutcome> {
+export async function harden(failedPolicy: string, win: Breach, allWins: Breach[], report: Report = () => {}): Promise<HardenOutcome> {
   const winTranscript: Turn[] = JSON.parse(win.transcript);
   let failures: SuiteResult[] = [];
   let best: HardenOutcome | null = null;
   let autoimmune = false;
   const log: HardenOutcome['log'] = [];
   for (let round = 1; round <= MAX_ROUNDS; round++) {
+    await report(round === 1 ? 'writing new rules' : `that did not hold. rewriting (try ${round})`);
     const candidate = await patch(failedPolicy, winTranscript, failures);
-    const results = await runSuites(candidate, allWins);
+    const results = await runSuites(candidate, allWins, report);
     log.push({ round, results });
     const regressionPassed = results.filter((r) => r.kind === 'regression').every((r) => r.passed);
     const legitPassed = results.filter((r) => r.kind === 'alive').every((r) => r.passed);

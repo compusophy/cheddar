@@ -88,3 +88,22 @@ td.dim { color: var(--dim); } td.money { color: var(--green); text-align: right;
 .card .row { display: flex; gap: 8px; }
 .card .row button { flex: 1; padding: 12px; border-radius: 14px; border: none; background: var(--gold); color: #000; font: inherit; font-weight: 600; cursor: pointer; }
 .card .row button.ghost { background: var(--bubble); color: var(--fg); font-weight: 500; }
+
+/* turn dots */
+.dots { display: inline-flex; gap: 4px; }
+.dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--gold); transition: background .3s; }
+.dots i.used { background: var(--line); }
+
+/* the win moment */
+.burst { position: fixed; inset: 0; pointer-events: none; z-index: 20; }
+.claim { display: flex; gap: 8px; margin-top: 16px; }
+.claim input { flex: 1; background: var(--bg); border: none; color: var(--fg); padding: 10px 14px; border-radius: 14px; font: inherit; }
+.claim button { padding: 10px 16px; border-radius: 14px; border: none; background: var(--gold); color: #000; font: inherit; font-weight: 600; cursor: pointer; }
+.again:disabled { background: var(--panel); color: var(--gold); animation: breathe 1.4s ease-in-out infinite; cursor: default; }
+
+/* history replays */
+.replay { display: flex; flex-direction: column; gap: 4px; margin-top: 12px; }
+.mini { max-width: 88%; padding: 8px 12px; border-radius: 16px; font-size: 13px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; }
+.mini.me { align-self: flex-end; background: var(--gold); color: #000; border-bottom-right-radius: 5px; }
+.mini.it { align-self: flex-start; background: var(--bubble); border-bottom-left-radius: 5px; }
+.mini.it mark { background: none; color: var(--gold); font-weight: 700; }

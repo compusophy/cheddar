@@ -3,10 +3,10 @@ import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
-import { isAddress } from 'viem';
+import { isAddress, verifyMessage } from 'viem';
 import * as db from './db';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
-import { WORD, STAKE, JACKPOT_SHARE } from './game';
+import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED } from './game';
 import { openSession, runChat } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
@@ -30,9 +30,10 @@ function limited(ip: string) {
 
 app.get('/api/state', async (_req, res) => {
   const gen = await db.currentGeneration();
+  const phase = await db.lockPhase('harden');
   res.json({
-    gen: gen.gen, policy: gen.policy, learning: !!(await db.lockSince('harden')),
-    word: WORD, stake: STAKE, jackpot: await db.jackpot(), share: JACKPOT_SHARE,
+    gen: gen.gen, policy: gen.policy, learning: phase ? { phase: /^\d+$/.test(phase) ? 'reading the conversation that beat it' : phase } : null,
+    word: WORD, stake: STAKE, jackpot: await db.jackpot(), seed: JACKPOT_SEED, share: JACKPOT_SHARE,
     house: treasury.agentAddress, token: treasury.PATH_USD, rpc: treasury.TEMPO_RPC, chain: 42431,
     max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
     machine: await db.machinePulse(),
@@ -64,16 +65,39 @@ app.post('/api/session', async (req, res) => {
   res.status(r.status).json(r.body);
 });
 app.post('/api/chat', async (req, res) => {
-  try {
-    if (limited(req.ip || 'x')) return res.status(429).json({ error: 'slow down' });
-    const { session, message } = req.body || {};
-    const r = await runChat(String(session), message);
-    res.status(r.status).json(r.body);
-    keep(r.hardening);
-  } catch (e) {
-    console.error('[chat]', e);
-    res.status(500).json({ error: 'something broke' });
+  if (limited(req.ip || 'x')) return res.status(429).json({ error: 'slow down' });
+  const { session, message } = req.body || {};
+  const wantsStream = String(req.headers.accept || '').includes('text/event-stream');
+  if (!wantsStream) {
+    try { const r = await runChat(String(session), message); res.status(r.status).json(r.body); keep(r.hardening); }
+    catch (e) { console.error('[chat]', e); res.status(500).json({ error: 'something broke' }); }
+    return;
   }
+  // the reply streams as server-sent events: each token as it is produced, then one final event with the result.
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders();
+  const send = (o: unknown) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+  try {
+    const r = await runChat(String(session), message, (delta) => send({ delta }));
+    send({ done: true, status: r.status, ...r.body });
+    keep(r.hardening);
+  } catch (e) { console.error('[chat]', e); send({ done: true, status: 500, error: 'something broke' }); }
+  res.end();
+});
+
+/** a name for the board. signed by the purse, so only its owner can set it. */
+app.post('/api/name', async (req, res) => {
+  const { player, nickname, signature } = req.body || {};
+  if (!player || !isAddress(player) || typeof signature !== 'string') return res.status(400).json({ error: 'bad request' });
+  const clean = String(nickname ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\ufeff]/g, '').trim().slice(0, 24);
+  if (clean.includes('\u{1F916}') || /machine/i.test(clean)) return res.status(400).json({ error: 'that name is taken' });
+  let ok = false;
+  try { ok = await verifyMessage({ address: player, message: `say cheese name: ${clean}`, signature: signature as `0x${string}` }); } catch {}
+  if (!ok) return res.status(401).json({ error: 'bad signature' });
+  await db.setNickname(player, clean || null);
+  res.json({ ok: true, nickname: clean || null });
 });
 
 /** testnet: fill a purse from the faucet so a first game can be staked. */

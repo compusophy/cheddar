@@ -11,7 +11,7 @@
 import { randomBytes } from 'crypto';
 import { isAddress } from 'viem';
 import * as db from './db';
-import { step, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './agent';
+import { step, stepStream, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './agent';
 import { harden } from './immune';
 import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, saidIt } from './game';
 import * as treasury from './treasury';
@@ -49,7 +49,7 @@ export async function openSession(player: string, nickname: string | null, stake
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 
-export async function runChat(sessionId: string, message: string): Promise<ChatResult & { hardening?: Promise<void> }> {
+export async function runChat(sessionId: string, message: string, onDelta?: (t: string) => void): Promise<ChatResult & { hardening?: Promise<void> }> {
   if (typeof message !== 'string' || !message.trim()) return { status: 400, body: { error: 'say something' } };
   if (message.length > MAX_MESSAGE_CHARS) return { status: 400, body: { error: `${MAX_MESSAGE_CHARS} characters max` } };
   const s = await db.getSession(String(sessionId));
@@ -61,7 +61,7 @@ export async function runChat(sessionId: string, message: string): Promise<ChatR
   if (s.turns >= MAX_TURNS) { await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'exhausted'); return { status: 409, body: { error: 'out of turns' } }; }
 
   const history: Turn[] = JSON.parse(s.transcript);
-  const produced = await step(gen.policy, history, message.trim());
+  const produced = onDelta ? await stepStream(gen.policy, history, message.trim(), onDelta) : await step(gen.policy, history, message.trim());
   const transcript = [...history, ...produced];
   const turns = s.turns + 1;
 
@@ -81,16 +81,18 @@ export async function runChat(sessionId: string, message: string): Promise<ChatR
 /** learn from the win, then pay it. one at a time across every function instance, via a db lock. */
 export async function runHardening(failed: db.Generation, winId: number, prize: number): Promise<void> {
   if (!(await db.acquireLock(LOCK, String(winId)))) return;
+  const report = (phase: string) => db.setLockPhase(LOCK, phase);
   try {
+    await report('reading the conversation that beat it');
     const win = (await db.breachById(winId))!;
     console.log(`[immune] gen ${failed.gen} beaten (#${winId}); learning...`);
-    const out = await harden(failed.policy, win, await db.allBreaches());
+    const out = await harden(failed.policy, win, await db.allBreaches(), report);
     const nextGen = failed.gen + 1;
     for (const round of out.log) for (const r of round.results) await db.recordRegression(nextGen, round.round, r.breachId, r.kind, r.passed, `${r.name}: ${r.detail}`);
     if (out.autoimmune) await db.markAutoimmune(winId);
     await db.createGeneration(nextGen, out.policy, winId, out.rounds, out.regressionPassed, out.legitPassed);
     console.log(`[immune] gen ${nextGen} live after ${out.rounds} round(s). regression=${out.regressionPassed} alive=${out.legitPassed} autoimmune=${out.autoimmune}`);
-    if (prize > 0) await payout(win, prize);
+    if (prize > 0) { await report('paying out'); await payout(win, prize); }
   } catch (e) {
     console.error('[immune] hardening failed', e);
   } finally {

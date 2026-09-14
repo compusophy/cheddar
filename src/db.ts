@@ -144,6 +144,15 @@ export async function acquireLock(name: string, holder: string): Promise<boolean
   await sql`DELETE FROM locks WHERE name = ${name} AND taken_at < now() - interval '10 minutes'`;
   return (await sql`INSERT INTO locks (name, holder) VALUES (${name}, ${holder}) ON CONFLICT DO NOTHING RETURNING name`).length > 0;
 }
+/** what the holder is doing right now, for the live narration while the ai learns. */
+export const setLockPhase = (name: string, phase: string) => sql`UPDATE locks SET holder = ${phase} WHERE name = ${name}`;
+export const lockPhase = async (name: string) => (await sql<{ holder: string }[]>`SELECT holder FROM locks WHERE name = ${name} AND taken_at > now() - interval '10 minutes'`)[0]?.holder ?? null;
+/** a purse signs its own name: nobody can rename someone else's wins. */
+export const setNickname = (player: string, nickname: string | null) =>
+  sql.begin(async (tx) => {
+    await tx`UPDATE sessions SET nickname = ${nickname} WHERE player = ${player.toLowerCase()}`;
+    await tx`UPDATE breaches SET nickname = ${nickname} WHERE player = ${player.toLowerCase()}`;
+  });
 export const releaseLock = (name: string) => sql`DELETE FROM locks WHERE name = ${name}`;
 export const lockSince = async (name: string) => (await sql<{ taken_at: string }[]>`SELECT taken_at FROM locks WHERE name = ${name} AND taken_at > now() - interval '10 minutes'`)[0]?.taken_at ?? null;
 
