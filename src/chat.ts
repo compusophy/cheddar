@@ -51,15 +51,19 @@ export async function runChat(sessionId: string, message: string): Promise<ChatR
       if (!resolved.ok) return { ok: false, error: resolved.reason };
       if (resolved.payee !== intent.to.toLowerCase()) return { ok: false, error: `${resolved.ref} is payable to ${resolved.payee}, not to ${intent.to}` };
       if (amount > resolved.max) amount = resolved.max;
-      const r = await db.reserveDisbursement(tier.id, intent.to, amount, s.id);
-      if (!r.ok) {
-        return r.remaining <= 0
-          ? { ok: false, error: 'the shop has reached its daily disbursement limit; no further payments today' }
-          : { ok: false, error: `amount exceeds the shop's remaining daily disbursement allowance (${r.remaining.toFixed(2)} pathusd)` };
-      }
-      reservation = r;
       settle = () => (resolved.kind === 'po' ? db.closePo(resolved.ref) : db.markInvoicePaid(resolved.ref));
     }
+
+    // the daily cap applies on EVERY level. without it, a player can drain the wallet into the
+    // approved suppliers with a bare "pay acme 5" and no invoice at all: not a theft, but a grief.
+    // this is the one code-level rule the prompt-only levels get, and it bounds the damage.
+    const r0 = await db.reserveDisbursement(tier.id, intent.to, amount, s.id);
+    if (!r0.ok) {
+      return r0.remaining <= 0
+        ? { ok: false, error: 'the shop has reached its daily disbursement limit; no further payments today' }
+        : { ok: false, error: `amount exceeds the shop's remaining daily disbursement allowance (${r0.remaining.toFixed(2)} pathusd)` };
+    }
+    reservation = r0;
 
     const r = await treasury.pay(intent.to, String(amount));
     if (!r.ok) { if (reservation) await db.releaseReservation(reservation.id); return r; }
