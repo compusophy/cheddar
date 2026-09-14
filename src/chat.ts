@@ -13,10 +13,15 @@ import { isAddress } from 'viem';
 import * as db from './db';
 import { step, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './agent';
 import { harden } from './immune';
-import { STAKE, JACKPOT_SHARE, saidIt } from './game';
+import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, saidIt } from './game';
 import * as treasury from './treasury';
 
 export type ChatResult = { status: number; body: any };
+/** a nickname is plain text on a public board: short, printable, no control characters, no lookalike-of-the-machine. */
+const cleanNick = (n: unknown) => {
+  const s = String(n ?? '').replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u2028-\u202f\ufeff]/g, '').trim().slice(0, 24);
+  return s && !s.includes('🤖') && !/machine/i.test(s) ? s : null;
+};
 const LOCK = 'harden';
 const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()]);
 
@@ -24,6 +29,7 @@ const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()]
 export async function openSession(player: string, nickname: string | null, stakeTx?: string) {
   if (!player || !isAddress(player)) return { status: 400, body: { error: 'no purse' } };
   const free = FREE_PLAYERS.has(player.toLowerCase());
+  if (!free && (await db.hasOpenSession(player))) return { status: 409, body: { error: 'finish the game you are in first' } };
   const id = randomBytes(12).toString('hex');
   if (!free) {
     if (!stakeTx || !/^0x[0-9a-fA-F]{64}$/.test(stakeTx)) return { status: 402, body: { error: 'stake required' } };
@@ -33,7 +39,7 @@ export async function openSession(player: string, nickname: string | null, stake
     await db.recordStake(id, player, STAKE, stakeTx, STAKE * JACKPOT_SHARE);
   }
   const gen = await db.currentGeneration();
-  await db.createSession(id, gen.gen, player.toLowerCase(), nickname ? String(nickname).slice(0, 32) : null);
+  await db.createSession(id, gen.gen, player.toLowerCase(), cleanNick(nickname));
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 
@@ -88,6 +94,7 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
 
 /** the payout. the daily cap is the safety valve between the model and the money. */
 async function payout(win: db.Breach, prize: number) {
+  if ((await db.wonLast24h(win.player)) + prize > PURSE_DAILY_CAP) { console.warn(`[payout] win #${win.id} deferred: purse daily cap`); return; }
   const rsv = await db.reserveDisbursement(win.player, prize, win.session_id);
   if (!rsv.ok) { console.warn(`[payout] win #${win.id} deferred: daily cap`); return; }
   const r = await treasury.pay(win.player, String(prize));

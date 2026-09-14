@@ -80,6 +80,9 @@ app.post('/api/chat', async (req, res) => {
 app.post('/api/faucet', async (req, res) => {
   const { address } = req.body || {};
   if (!address || !isAddress(address)) return res.status(400).json({ error: 'bad purse' });
+  // once per purse, and only a purse that has never staked: a first game, not a spigot.
+  if (await db.faucetSeen(address) || await db.hasEverStaked(address)) return res.status(429).json({ error: 'already filled' });
+  await db.markFaucet(address);
   const r = await treasury.faucet(address);
   res.status(r.status < 500 ? 200 : r.status).json({ ok: r.status < 400 });
 });

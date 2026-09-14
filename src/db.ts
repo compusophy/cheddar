@@ -81,6 +81,16 @@ export async function claimJackpot(): Promise<number> {
     return Number(r.amount);
   }) as any;
 }
+/** one open game per purse at a time: you are either playing or you are not. */
+export const hasOpenSession = async (player: string) =>
+  (await sql`SELECT 1 FROM sessions WHERE player = ${player.toLowerCase()} AND status = 'open' AND updated_at > now() - interval '30 minutes' LIMIT 1`).length > 0;
+/** a purse that has ever staked has money; the faucet is for first-timers only. */
+export const hasEverStaked = async (player: string) => (await sql`SELECT 1 FROM stakes WHERE player = ${player.toLowerCase()} LIMIT 1`).length > 0;
+export const faucetSeen = async (player: string) => (await sql`SELECT 1 FROM locks WHERE name = ${'faucet-' + player.toLowerCase()}`).length > 0;
+export const markFaucet = (player: string) => sql`INSERT INTO locks (name, holder) VALUES (${'faucet-' + player.toLowerCase()}, 'faucet') ON CONFLICT DO NOTHING`;
+/** wins paid to one purse in the last day; the per-purse cap stops one player taking every pot in a row. */
+export const wonLast24h = async (player: string) =>
+  Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM breaches WHERE player = ${player.toLowerCase()} AND paid_at > now() - interval '1 day'`)[0].t);
 export const stakeSeen = async (txHash: string) => (await sql`SELECT 1 FROM stakes WHERE tx_hash = ${txHash}`).length > 0;
 export const markPaid = (winId: number, amount: number, txHash: string) => sql`UPDATE breaches SET amount = ${amount}, tx_hash = ${txHash}, paid_at = now() WHERE id = ${winId}`;
 export const stakedLast24h = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM stakes WHERE created_at > now() - interval '1 day'`)[0].t);

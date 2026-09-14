@@ -14,7 +14,13 @@ the money is real: a dollar-pegged stablecoin on the tempo testnet, in a purse t
 
 **how it pays for itself.** inference on the model in use costs a few thousandths of a cent per turn; a whole game is under a cent, and the learning after a win is a few cents. the stake covers that many times over. the cost that matters is the prize, and the prize is funded by the stakes. the daily payout cap is the safety valve.
 
-**anti-abuse.** the stake is the rate limit: a session cannot open without a verified on-chain transfer to the house, and a stake hash can only be used once. the prize is claimed atomically (two simultaneous wins cannot both take the pot) and paid only after the ai has finished learning, so a burst of sessions against a beaten generation cannot each collect before the patch lands. the machine plays free and wins nothing but the lesson.
+**anti-abuse.** the stake is the rate limit: a session cannot open without a verified on-chain transfer to the house, and a stake hash can only be used once. one open game per purse at a time. the prize is claimed atomically (two simultaneous wins cannot both take the pot) and paid only after the ai has finished learning, so a burst of sessions against a beaten generation cannot each collect before the patch lands. a per-purse daily win cap sits under the global one. the faucet fills a purse once, and only one that has never staked. the machine plays free and wins nothing but the lesson.
+
+## three layers, kept apart
+
+- **the ai is defended by nothing but what it has learned.** what players say to it is never filtered, sanitized, or rewritten. tricking it is the game, and early generations are supposed to be naive.
+- **the money is defended by code that never changes.** the stake, the pot, the caps, the deferred payout. these are not part of the hardening and never weaken.
+- **the player is defended by the browser never trusting a string.** every string that reaches the page is escaped before it touches the dom. a content security policy allows only the site's own code and two pinned libraries, so no injected script can ever read a purse. nicknames are bounded and stripped of control characters.
 
 ## the loop
 

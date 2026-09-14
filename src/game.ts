@@ -21,6 +21,7 @@ export const STAKE = 0.25;        // dollars per game
 export const JACKPOT_SHARE = 0.8; // of each stake into the pot; the rest covers inference + hosting
 export const JACKPOT_SEED = 1;    // the pot after a win
 export const DAILY_CAP = 100;     // dollars paid out per rolling 24h, all winners: the safety valve
+export const PURSE_DAILY_CAP = 20; // dollars one purse can win per rolling 24h
 
 export const saidIt = (text: string) => text.toLowerCase().includes(WORD);
 
