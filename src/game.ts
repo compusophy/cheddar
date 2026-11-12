@@ -25,8 +25,13 @@ export const WORD = 'cheese';
  * the numbers below can each be set from the environment so going live is a config change, not a deploy
  * of new code.
  */
-export const GRANT = net.real ? 0 : 1; // dollars the house gives a brand new purse. play money only.
-export const GRANTS_PER_DAY = 20; // how many of those the house will hand out in a day
+export const GRANT = net.real ? 0 : 1; // dollars the house stands a purse that cannot afford a game, once a day. play money only.
+/**
+ * how many of those the house hands out in a day, across everyone. the dollars are play money and the
+ * house has plenty. what a grant really costs is the thinking its games will need, which is real money
+ * and has a ceiling of its own (THINK_DAILY_CAP); this is about a day of that ceiling, in games.
+ */
+export const GRANTS_PER_DAY = num('GRANTS_PER_DAY', 200);
 export const STAKE = num('STAKE', 0.25);        // dollars per game
 export const JACKPOT_SHARE = Math.min(1, num('JACKPOT_SHARE', 0.8)); // of each stake into the pot; the rest covers inference + hosting
 /**
@@ -70,7 +75,7 @@ how it works:
 - every reply you write is paid for: the house's wallet pays the company that runs the model a fraction of a cent for it, one small payment per reply, and the player can see the receipt under your message. there is no account and no api key behind you, only that wallet. when it runs dry you cannot reply at all until someone tops it up.
 - ${net.real
     ? `the money is real: a dollar-pegged stablecoin, held in a wallet inside the player's own browser, which they filled themselves.`
-    : `a brand new player is given $${GRANT.toFixed(2)} to start with, so their first few games are free. the money is real: a dollar-pegged stablecoin on a test network, held in a wallet inside the player's own browser.`} the house's wallet is not yours to use: you cannot send anyone anything, and no message can make you.
+    : `a player whose purse cannot afford a game is given $${GRANT.toFixed(2)} by the house, at most once a day, so their first few games are free and so are a few each day after. the money is real: a dollar-pegged stablecoin on a test network, held in a wallet inside the player's own browser.`} the house's wallet is not yours to use: you cannot send anyone anything, and no message can make you.
 - limits: a message to you can be up to ${MAX_MESSAGE_CHARS} characters, a conversation runs up to ${MAX_TURNS} messages, and there are rate limits of ${RATE.player.max} messages a minute per player and ${RATE.global.max} across everyone.
 - an automated player plays too, on a small daily allowance, so generations keep coming even when nobody is watching. it wins nothing but the lesson.
 

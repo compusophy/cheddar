@@ -74,14 +74,15 @@ async function purse(nickname = 'tester') {
   const from = { ...J, 'x-real-ip': `198.51.100.${1 + Math.floor(Math.random() * 250)}` };
   const proof = async () => { const ts = Date.now(); return { ts, sig: await account.signMessage({ message: `say cheese purse: ${account.address.toLowerCase()} ${ts}` }) }; };
   const grant = () => api('/faucet', { method: 'POST', headers: from, body: JSON.stringify({ address: account.address }) });
-  const stake = async () => {
-    const hash = await wallet.sendTransaction({ to: TOKEN, data: encodeFunctionData({ abi, functionName: 'transfer', args: [state.house, parseUnits(String(state.stake), 6)] }) });
+  const send = async (to: string, amount: number) => {
+    const hash = await wallet.sendTransaction({ to: TOKEN, data: encodeFunctionData({ abi, functionName: 'transfer', args: [to as `0x${string}`, parseUnits(String(amount), 6)] }) });
     await pub.waitForTransactionReceipt({ hash });
     return hash;
   };
+  const stake = () => send(state.house, state.stake);
   const open = async (hash?: string) => api('/session', { method: 'POST', headers: from, body: JSON.stringify({ player: account.address, nickname, stake: hash, ...(await proof()) }) });
   const peek = async () => { const p = await proof(); return api(`/session?player=${account.address}&ts=${p.ts}&sig=${p.sig}`, { headers: from }); };
-  return { account, address: account.address, proof, grant, stake, open, peek, balance: () => bal(account.address) };
+  return { account, address: account.address, proof, grant, send, stake, open, peek, balance: () => bal(account.address) };
 }
 /** a purse that has its welcome grant and a game open. */
 async function playing(nickname?: string) {
@@ -127,6 +128,15 @@ async function main() {
   const grants = await Promise.all(Array.from({ length: 6 }, () => g.grant()));
   await nap(5000);
   check('six requests at once for one purse: one grant', grants.filter((r) => r.status === 200).length === 1 && near(await g.balance(), state.grant), `${grants.map((r) => r.status)} $${await g.balance()}`);
+  const more = await g.grant();
+  check('a purse that can afford a game is not given more', more.status === 409 && more.why === 'funded', JSON.stringify(more));
+  // it loses all but a few cents (sent away here, rather than played away), and asks the house again the same day.
+  await g.send('0x000000000000000000000000000000000000dEaD', 0.8);
+  await until('the purse to be nearly empty', async () => (await g.balance()) < 0.25);
+  const dry = await g.grant();
+  check('an empty purse that has had today\'s dollar is told so, and when the next one comes', dry.status === 429 && dry.why === 'had' && dry.retry_after > 86000 && dry.retry_after <= 86400, JSON.stringify(dry));
+  await nap(3000);
+  check('and is given nothing', (await g.balance()) < 0.25, String(await g.balance()));
 
   console.log('a stake becomes one game');
   const a = await purse('alice');

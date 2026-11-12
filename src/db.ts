@@ -304,17 +304,21 @@ export const sessionPaid = async (id: string) => (await sql`SELECT 1 FROM stakes
 export const openSessionFor = async (player: string) =>
   (await sql<SessionRow[]>`SELECT * FROM sessions WHERE player = ${player.toLowerCase()} AND status = 'open' AND updated_at > now() - interval '30 minutes' ORDER BY updated_at DESC LIMIT 1`)[0];
 export const hasOpenSession = async (player: string) => !!(await openSessionFor(player));
-/** a purse that has ever staked has money; the faucet is for first-timers only. */
-export const hasEverStaked = async (player: string) => (await sql`SELECT 1 FROM stakes WHERE player = ${player.toLowerCase()} LIMIT 1`).length > 0;
-export const faucetSeen = async (player: string) => (await sql`SELECT 1 FROM locks WHERE name = ${'faucet-' + player.toLowerCase()}`).length > 0;
-export const markFaucet = (player: string) => sql`INSERT INTO locks (name, holder) VALUES (${'faucet-' + player.toLowerCase()}, 'faucet') ON CONFLICT DO NOTHING`;
 /**
- * take this purse's one welcome grant. true for exactly one caller, however many ask at the same
- * moment: asking "was it given?" and then writing "it was given" as two steps let all of them through.
+ * take this purse's dollar from the house: one a day. true for exactly one caller, however many ask
+ * at the same moment: asking "was it given?" and then writing "it was given" as two steps let all of
+ * them through. a purse that took one more than a day ago may take another.
  */
 export const claimFaucet = async (player: string) =>
-  (await sql`INSERT INTO locks (name, holder) VALUES (${'faucet-' + player.toLowerCase()}, 'faucet') ON CONFLICT DO NOTHING RETURNING name`).length > 0;
+  (await sql`INSERT INTO locks (name, holder, taken_at) VALUES (${'faucet-' + player.toLowerCase()}, 'faucet', now())
+    ON CONFLICT (name) DO UPDATE SET taken_at = now() WHERE locks.taken_at < now() - interval '1 day' RETURNING name`).length > 0;
+/** a dollar that was claimed and then could not be given: the purse may ask again. */
 export const unclaimFaucet = (player: string) => sql`DELETE FROM locks WHERE name = ${'faucet-' + player.toLowerCase()} AND holder = 'faucet'`;
+/** seconds until this purse may be given another dollar. 0 when it may now. */
+export async function faucetWaits(player: string): Promise<number> {
+  const [r] = await sql<{ s: number }[]>`SELECT CEIL(EXTRACT(EPOCH FROM (taken_at + interval '1 day' - now())))::int AS s FROM locks WHERE name = ${'faucet-' + player.toLowerCase()}`;
+  return Math.max(0, Number(r?.s ?? 0));
+}
 /** wins paid to one purse in the last day; the per-purse cap stops one player taking every pot in a row. */
 export const wonLast24h = async (player: string) =>
   Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM breaches WHERE player = ${player.toLowerCase()} AND paid_at > now() - interval '1 day'`)[0].t);
@@ -455,7 +459,11 @@ export async function rateAllow(bucket: string, max: number, seconds: number): P
   return sql.begin(async (tx) => {
     // one request at a time per bucket: without this, two that count at the same moment both see the last free slot.
     await tx`SELECT pg_advisory_xact_lock(hashtext(${'rate:' + bucket}))`;
-    await tx`DELETE FROM rate_hits WHERE bucket = ${bucket} AND at < now() - interval '1 hour'`;
+    // old hits are swept as it goes, but never one inside the window being counted: a day-long
+    // allowance that was swept after an hour was an hourly allowance.
+    await tx`DELETE FROM rate_hits WHERE bucket = ${bucket} AND at < now() - (${Math.max(seconds, 3600)} * interval '1 second')`;
+    // a bucket nobody asks about again (a player who never came back) is swept by whoever passes, now and then.
+    if (Math.random() < 0.01) await tx`DELETE FROM rate_hits WHERE at < now() - interval '2 days'`;
     const [r] = await tx<{ n: number; oldest: Date | null }[]>`
       SELECT COUNT(*)::int AS n, MIN(at) AS oldest FROM rate_hits
       WHERE bucket = ${bucket} AND at > now() - (${seconds} * interval '1 second')`;

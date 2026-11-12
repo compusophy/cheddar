@@ -46,9 +46,16 @@ async function main() {
   await db.updateSession('gate-test', [], 0, 'exhausted');
   check('a finished game frees the purse', !(await db.hasOpenSession(p1)));
   await db.sql`DELETE FROM sessions WHERE id = 'gate-test'`;
-  check('the faucet has not seen a fresh purse', !(await db.faucetSeen(p1)));
-  await db.markFaucet(p1);
-  check('the faucet remembers a purse it filled', await db.faucetSeen(p1));
+  check('a fresh purse has no wait for its dollar from the house', (await db.faucetWaits(p1)) === 0);
+  check('it takes it', await db.claimFaucet(p1));
+  check('and cannot take another the same day', !(await db.claimFaucet(p1)));
+  const wait = await db.faucetWaits(p1);
+  check('it is told how long until the next one: a day', wait > 86300 && wait <= 86400, String(wait));
+  await db.sql`UPDATE locks SET taken_at = now() - interval '23 hours' WHERE name = ${'faucet-' + p1}`;
+  check('23 hours on it still waits, about an hour', !(await db.claimFaucet(p1)) && Math.abs((await db.faucetWaits(p1)) - 3600) < 5, String(await db.faucetWaits(p1)));
+  await db.sql`UPDATE locks SET taken_at = now() - interval '25 hours' WHERE name = ${'faucet-' + p1}`;
+  const dayOn = await Promise.all(Array.from({ length: 8 }, () => db.claimFaucet(p1)));
+  check('a day on, eight requests at once: one more dollar, not eight', dayOn.filter(Boolean).length === 1, JSON.stringify(dayOn));
   await db.sql`DELETE FROM locks WHERE name = ${'faucet-' + p1}`;
 
   console.log('the payout cap');
@@ -185,6 +192,15 @@ async function main() {
   check('twelve at once against a limit of five: five get through', tried.filter((x) => x === 0).length === 5, JSON.stringify(tried));
   check('the rest are told how long to wait', tried.filter((x) => x > 0).length === 7 && tried.every((x) => x <= 60));
   await db.sql`DELETE FROM rate_hits WHERE bucket = ${bucket}`;
+  // an allowance for a day counts the whole day. hits older than an hour used to be swept before the count.
+  const daily = 'rate-day-' + Date.now();
+  for (const hoursAgo of [20, 5, 2]) await db.sql`INSERT INTO rate_hits (bucket, at) VALUES (${daily}, now() - (${hoursAgo} * interval '1 hour'))`;
+  const full = await db.rateAllow(daily, 3, 86400);
+  check('three a day, all three taken hours ago: a fourth is refused', full > 0, String(full));
+  check('and told to wait until the oldest is a day old, about four hours', Math.abs(full - 4 * 3600) < 10, String(full));
+  check('with room for four, it is let through', (await db.rateAllow(daily, 4, 86400)) === 0);
+  check('an hourly allowance on the same bucket only looks back an hour', (await db.rateAllow(daily, 2, 3600)) === 0);
+  await db.sql`DELETE FROM rate_hits WHERE bucket = ${daily}`;
 
   console.log('one message at a time in a game');
   const tp = '0x00000000000000000000000000000000000000e1';

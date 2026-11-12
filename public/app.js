@@ -2,7 +2,8 @@ const $ = (s) => document.querySelector(s);
 const api = async (path, opts) => {
   const r = await fetch('/api' + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
   const j = await r.json().catch(() => ({ error: 'something broke' }));
-  if (!r.ok) throw new Error(j.error || r.statusText);
+  // a refusal carries what the server said with it: some say why, and when to ask again.
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status, body: j });
   return j;
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -53,12 +54,36 @@ async function feeFor(token, to) {
 /** a game needs the stake and a little for gas. two cents covers the worst case many times over. */
 const needed = () => (state?.stake ?? 0.25) + 0.02;
 
-/** play money only: the purse fills itself once so the first game can be staked. */
+/**
+ * play money only: the house stands a purse that cannot afford a game a dollar, once a day. when it
+ * does not (this purse has had today's, or the house has given out its day's worth) the server says
+ * why and when, the page says so too, and it does not ask again until it is worth asking.
+ */
+let dry = null;
+function dryLine() {
+  const left = Math.round(((Number(ls.get('dryUntil')) || 0) - Date.now()) / 1000);
+  if (left <= 0) { ls.del('dryUntil'); ls.del('dryAsk'); ls.del('dryWhy'); return null; }
+  const when = ` more in about ${howLong(left)}.`;
+  return ls.get('dryWhy') === 'house' ? `the house has given out today's play money.${when}` : `your purse is empty, and it has had today's ${money(state.grant)} from the house.${when}`;
+}
+/** the status line says an empty purse whenever it has nothing more pressing to say (see `status`). */
+const sayDry = () => { paintBalance(false); status(''); };
 async function fillIfEmpty() {
   await readBalance();
-  if (!(state?.grant > 0) || balance >= needed()) return paintBalance(false);
-  status(`a welcome ${money(state.grant)} for your first games…`, 'busy');
-  try { await api('/faucet', { method: 'POST', body: JSON.stringify({ address: purse.address }) }); } catch {}
+  if (!(state?.grant > 0) || balance >= needed()) { dry = null; return paintBalance(false); }
+  if (Date.now() < (Number(ls.get('dryAsk')) || 0) && (dry = dryLine())) return sayDry();
+  status(ls.get('had') ? `your purse is empty. ${money(state.grant)} from the house…` : `a welcome ${money(state.grant)} for your first games…`, 'busy');
+  try { await api('/faucet', { method: 'POST', body: JSON.stringify({ address: purse.address }) }); ls.set('had', '1'); dry = null; ls.del('dryUntil'); ls.del('dryAsk'); ls.del('dryWhy'); }
+  catch (e) {
+    const b = e.body || {};
+    if (b.retry_after > 0 && (b.why === 'had' || b.why === 'house')) {
+      if (b.why === 'had') ls.set('had', '1');
+      // the purse's own day is known exactly. the house's count can free up sooner, so that one is asked about again before long.
+      ls.set('dryUntil', String(Date.now() + b.retry_after * 1000)); ls.set('dryWhy', b.why);
+      ls.set('dryAsk', String(Date.now() + (b.why === 'house' ? Math.min(b.retry_after, 600) : b.retry_after) * 1000));
+      dry = dryLine(); return sayDry();
+    }
+  }
   for (let i = 0; i < 8 && balance < needed(); i++) { await sleep(2000); await readBalance(); }
   paintBalance(balance > 0); status('');
 }
@@ -67,10 +92,10 @@ async function fillIfEmpty() {
 function describeMoney() {
   const real = !!state.real;
   const price = $('#price');
-  if (price) price.textContent = real ? `${money(state.stake)} a game, from your purse.` : `play money. a new purse gets ${money(state.grant)} to start.`;
+  if (price) price.textContent = real ? `${money(state.stake)} a game, from your purse.` : `play money. an empty purse gets ${money(state.grant)} a day from the house.`;
   $('#cashabout').textContent = real
     ? `real dollars (${state.symbol} on tempo), kept in this browser and nowhere else. each game stakes ${money(state.stake)}; most of it goes into the pot. copy your secret key and keep it somewhere safe: if this browser forgets it, the money is gone.`
-    : `test dollars, kept in this browser. they are worth nothing, but every stake and every payout is a real transaction. each game stakes ${money(state.stake)}; most of it goes into the pot.`;
+    : `test dollars, kept in this browser. they are worth nothing, but every stake and every payout is a real transaction. each game stakes ${money(state.stake)}; most of it goes into the pot. when the purse cannot afford a game the house puts in ${money(state.grant)}, once a day.`;
   const thinks = $('#thinks');
   if (thinks) thinks.textContent = 'it buys each reply itself, out of the stakes. no api key anywhere.';
   $('#addmoney').classList.toggle('hidden', !real);
@@ -84,6 +109,8 @@ function status(text, kind) {
   const el = $('#status');
   // nothing else to say, and the house cannot pay for a reply: say that, before anyone types.
   if (!text && state && state.awake === false && !state.learning) { text = asleepLine(); kind = 'busy'; }
+  // or the purse cannot afford a game and the house has no dollar for it yet: say that, and when.
+  else if (!text && dry && !session && balance < needed()) text = dry;
   el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : '');
 }
 
@@ -234,7 +261,7 @@ async function ensureSession() {
       if (balance < needed()) await fillIfEmpty();
       if (balance < needed()) {
         if (state.real) openPurse();
-        throw new Error(state.real ? `add money to play: a game is ${money(state.stake)}.` : 'your purse is empty.');
+        throw new Error(state.real ? `add money to play: a game is ${money(state.stake)}.` : dry || 'your purse is empty.');
       }
       status(`putting ${money(state.stake)} in the pot…`, 'busy');
       try { hash = await stake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }

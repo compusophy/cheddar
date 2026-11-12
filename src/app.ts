@@ -205,10 +205,14 @@ app.post('/api/name', async (req, res) => {
 });
 
 /**
- * the welcome grant. a brand new purse is given a small amount from the house so the first few games
- * are free: once per purse, only a purse that has never staked, and the house hands out a bounded
- * number a day. the raw testnet faucet is never pointed at a player, because a million play dollars
- * makes the stake meaningless and the money feel fake.
+ * the welcome grant. a purse that cannot afford a game is given a small amount from the house, so the
+ * first few games are free and a player who has lost it all is not locked out for good: once a day
+ * per purse, and the house hands out a bounded number a day. a fresh purse costs nothing to make, so
+ * giving an old one its dollar again gives away nothing a new one could not take. the raw testnet
+ * faucet is never pointed at a player, because a million play dollars makes the stake meaningless
+ * and the money feel fake.
+ *
+ * a refusal says why, and when to ask again, so the page can tell the player instead of going quiet.
  */
 app.post('/api/faucet', async (req, res) => {
   if (limited(visitor(req), 10, 'grant')) return res.status(429).json({ error: 'slow down' });
@@ -216,11 +220,14 @@ app.post('/api/faucet', async (req, res) => {
   // with real money there is no grant at all: a fresh address is free to make, so a grant is a tap.
   if (!(GRANT > 0)) return res.status(404).json({ error: 'no welcome grant here' });
   if (!address || !isAddress(address)) return res.status(400).json({ error: 'bad purse' });
-  if (await db.faucetSeen(address) || await db.hasEverStaked(address)) return res.status(429).json({ error: 'already given' });
-  // the purse's one grant is taken in a single step, so of many requests at once only one goes on to be paid.
-  if (!(await db.claimFaucet(address))) return res.status(429).json({ error: 'already given' });
-  if (await db.rateAllow('grant', GRANTS_PER_DAY, 86400)) { await db.unclaimFaucet(address); return res.status(429).json({ error: 'the house has given out enough today' }); }
+  if (Number(await treasury.balance(address)) >= STAKE + 0.02) return res.status(409).json({ error: 'that purse can already afford a game', why: 'funded' });
+  // the purse's dollar for the day is taken in a single step, so of many requests at once only one goes on to be paid.
+  if (!(await db.claimFaucet(address))) return res.status(429).json({ error: 'this purse has had its dollar from the house today', why: 'had', retry_after: Math.max(1, await db.faucetWaits(address)) });
+  const full = await db.rateAllow('grant', GRANTS_PER_DAY, 86400);
+  if (full) { await db.unclaimFaucet(address); return res.status(429).json({ error: "the house has given out today's play money", why: 'house', retry_after: full }); }
   const r = await treasury.pay(address, String(GRANT));
+  // a transfer that certainly did not happen leaves the purse free to ask again. one that may still land does not.
+  if (!r.ok && !r.maybe) await db.unclaimFaucet(address);
   res.json({ ok: r.ok });
 });
 

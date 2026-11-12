@@ -108,7 +108,8 @@ export async function broadcast(p: Signed): Promise<Outcome> {
   }
 }
 
-export type PayResult = { ok: true; hash: string } | { ok: false; error: string };
+/** `maybe`: it was sent and has not been seen in a block yet, so it may still land. */
+export type PayResult = { ok: true; hash: string } | { ok: false; error: string; maybe?: boolean };
 
 /** sign, send and confirm in one go, for payments nothing else depends on (the welcome grant). */
 export async function pay(to: string, amount: string): Promise<PayResult> {
@@ -116,7 +117,8 @@ export async function pay(to: string, amount: string): Promise<PayResult> {
     const p = await signPayment(to, amount);
     const o = await broadcast(p);
     if (o === 'landed') { console.log(`[treasury] paid ${amount} ${net.symbol} to ${to}: ${p.hash}`); return { ok: true, hash: p.hash }; }
-    return { ok: false, error: o === 'failed' ? 'the transfer was refused' : 'the transfer was not confirmed' };
+    if (o === 'pending') return { ok: false, error: 'the transfer was not confirmed', maybe: true };
+    return { ok: false, error: o === 'failed' ? 'the transfer was refused' : 'the transfer was not sent in time' };
   } catch (e) {
     console.error('[treasury] pay error', (e as Error).message);
     return { ok: false, error: (e as Error).message };
