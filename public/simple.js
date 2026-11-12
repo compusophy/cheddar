@@ -63,27 +63,31 @@ function plain(e) {
   const why = String((e && (e.shortMessage || e.message)) || e || '');
   if (/popup/i.test(why) && /block/i.test(why)) return 'your browser blocked the wallet. allow pop-ups for this site and try again.';
   if ((e && e.code === 4001) || /reject|denied|cancel|closed|dismiss/i.test(why)) return 'the wallet was closed. nothing was charged.';
-  return why.slice(0, 160) || 'that did not work. nothing was charged.';
+  // which step it was, then what the wallet or the game said about it.
+  return `${e && e.step ? `could not ${e.step}: ` : ''}${why.slice(0, 160) || 'that did not work.'}`;
 }
 const failed = (body, fallback) => Object.assign(new Error(body.error || fallback), { body });
+/** do one named step. if it fails, the failure says which step it was. */
+const step = async (name, fn) => { try { return await fn(); } catch (e) { throw Object.assign(e instanceof Error ? e : new Error(String(e)), { step: name }); } };
 
 async function signIn() {
-  const w = await wallet();
-  me = (await w.known(where())) || (await w.connect(where()));
+  // straight to the wallet: on a phone it opens in its own window, which a browser allows only right after a tap.
+  me = await step('sign in', async () => (await wallet()).connect(where()));
   store.set('me', me);
   return paintMe();
 }
-async function addMoney() {
+const addMoney = () => step('add money', async () => {
   const w = await wallet();
   if (where().test) await fetch(state.rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tempo_fundAddress', params: [me] }) });
   else await w.deposit({ ...where(), address: me, token: state.token, amount: '5.00' });
-}
+});
 /** a game to talk in: the one already open, or a new one paid for from the wallet. */
 async function ensureGame() {
   if (game) return;
   if (state.closed) throw new Error('closed for now.');
+  say(me ? 'one moment…' : 'signing in…');
+  if (!me) await signIn();
   const w = await wallet();
-  if (!me) { say('signing in…'); await signIn(); }
   // a cent over the price: the wallet pays a small network fee on top.
   const need = state.stake + 0.01;
   let has = await paintMe();
@@ -94,8 +98,8 @@ async function ensureGame() {
     if (has < need) throw new Error('the money is not there yet. it can take a few minutes: send again when it shows.');
   }
   say(`starting a game: ${money(state.stake)}`);
-  const res = await w.pay({ ...where(), token: state.token, most: String(state.stake), kept: store.get('paid'), keep: (proof) => store.set('paid', proof) },
-    '/api/agent/play', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  const res = await step('start a game', () => w.pay({ ...where(), token: state.token, most: String(state.stake), kept: store.get('paid'), keep: (proof) => store.set('paid', proof) },
+    '/api/agent/play', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }));
   const body = await res.json().catch(() => ({}));
   if (!res.ok || !body.session) throw failed(body, 'a game could not be started.');
   game = { id: body.session, left: body.turns_left };
@@ -171,6 +175,16 @@ $('#out').onclick = async () => {
   await look();
   if (!state) { say('the game is not answering. try again in a moment.'); return; }
   paintMe();
+  // the wallet's code is fetched and made ready now, so that the first tap can open it at once.
+  // if this browser is already signed in to the wallet, the page knows who it is talking to.
+  setTimeout(async () => {
+    try {
+      const w = await wallet();
+      await w.warm(where());
+      const known = await w.known(where());
+      if (known && known !== me && !working) { me = known; store.set('me', me); paintMe(); }
+    } catch { /* it is asked for again at the first tap, and says then what went wrong */ }
+  }, 300);
   // a game left open in this browser is picked back up.
   const id = store.get('game');
   if (id) {

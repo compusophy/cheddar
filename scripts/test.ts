@@ -277,7 +277,7 @@ async function main() {
   // it is pinned: rebuild it (npm run build in web/), read what changed, and only then move this hash.
   const walletLib = fs.readFileSync(path.join(process.cwd(), 'public', 'vendor', 'tempo-wallet.js'));
   const walletHash = crypto.createHash('sha384').update(walletLib).digest('base64');
-  check('the wallet bundle is the one that was built and read', walletHash === 'zcyenmYxS9MHYNnZBQiTeAzCydl7KYEvmc8xEkgGPieOPHaJH9O/NmxLKMN9esII', walletHash);
+  check('the wallet bundle is the one that was built and read', walletHash === 'XFRtLAtcXkBOCsg2xeg+iMfc4nRgauzDEe7d7KRzoOu5UwF96SzNfAMjahd+ODNS', walletHash);
   check('the page frames the wallet and nothing else', /(^|;)\s*frame-src https:\/\/wallet\.tempo\.xyz\s*(;|$)/.test(policy) && !/frame-src[^;]*(\*|'self'|http:)/.test(policy), policy);
   const pageJs = fs.readFileSync(path.join(process.cwd(), 'public', 'app.js'), 'utf8');
   check('and loads its code from here, when asked', /s\.src = '\/vendor\/tempo-wallet\.js'/.test(pageJs) && !/<script[^>]*tempo-wallet/.test(page));

@@ -29,13 +29,22 @@ const first = (r: any): string | null => {
 };
 
 const api = {
+  /**
+   * get ready, asking nobody anything. on a phone the wallet opens in a window of its own, and a
+   * browser lets a page open one only at the moment of a tap: whatever can be done beforehand is.
+   */
+  async warm(o: Where): Promise<void> {
+    try { await (provider(o) as any).ready?.(); } catch { /* it will say so when it is asked for something */ }
+  },
   /** the account already signed in here, if there is one. asks nobody anything. */
   async known(o: Where): Promise<string | null> {
     try { return first(await provider(o).request({ method: 'eth_accounts' } as any)); } catch { return null; }
   },
   /** sign in: the wallet opens and asks which account to use. resolves with its address. */
   async connect(o: Where): Promise<string> {
-    // the throwaway test key has no account until one is made for it. the real wallet does its own signing in and signing up.
+    // the throwaway test key: the one already made is used again; there is none until one is made.
+    if (o.test) { const had = await api.known(o); if (had) return had; }
+    // the real wallet does its own signing in and signing up.
     const address = first(await provider(o).request({ method: 'wallet_connect', ...(o.test ? { params: [{ capabilities: { method: 'register' } }] } : {}) } as any));
     if (!address) throw new Error('the wallet did not name an account');
     return address;
