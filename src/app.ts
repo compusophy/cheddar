@@ -68,7 +68,7 @@ async function makeState() {
     // show how to add money instead. closed: the operator has stopped new games (open ones play out).
     network: net.name, real: net.real, closed: flag('CLOSED'),
     // awake: the house can pay for the ai's next thought. when it cannot, the page takes no stake.
-    awake: up.ok, asleep: up.ok ? null : up.why, model: MODEL, thinks: think.describe(),
+    awake: up.ok, asleep: up.ok ? null : up.why, ...(up.wakesIn ? { wakes_in: up.wakesIn } : {}), model: MODEL, thinks: think.describe(),
     max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
     machine,
   };

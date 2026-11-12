@@ -8,6 +8,10 @@ const api = async (path, opts) => {
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: (k) => { try { localStorage.removeItem(k); } catch {} } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** a wait, said the way a person would: "a minute", "25 min", "3h". */
+const howLong = (s) => { s = Number(s); return s < 90 ? 'a minute' : s < 5400 ? `${Math.round(s / 60)} min` : `${Math.round(s / 3600)}h`; };
+/** why it is asleep, with when it wakes if that is known. */
+const asleepLine = () => `asleep: ${state.asleep}.${state.wakes_in ? ` back in about ${howLong(state.wakes_in)}.` : ''} no charge.`;
 const pop = (el) => { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); };
 const money = (n) => `$${Number(n).toFixed(2)}`;
 /** small amounts keep their small digits: a reply costs a fraction of a cent, and $0.00 would be a lie. */
@@ -79,7 +83,7 @@ function describeMoney() {
 function status(text, kind) {
   const el = $('#status');
   // nothing else to say, and the house cannot pay for a reply: say that, before anyone types.
-  if (!text && state && state.awake === false && !state.learning) { text = `asleep: ${state.asleep}. no charge.`; kind = 'busy'; }
+  if (!text && state && state.awake === false && !state.learning) { text = asleepLine(); kind = 'busy'; }
   el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : '');
 }
 
@@ -226,7 +230,7 @@ async function ensureSession() {
     if (hash) status('picking your stake back up…', 'busy');
     else {
       if (state.closed) throw new Error('closed for now. nothing was charged.');
-      if (state.awake === false) throw new Error(`asleep: ${state.asleep}. no charge.`);
+      if (state.awake === false) throw new Error(asleepLine());
       if (balance < needed()) await fillIfEmpty();
       if (balance < needed()) {
         if (state.real) openPurse();

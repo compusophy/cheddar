@@ -12,6 +12,9 @@ const check = (name: string, cond: boolean, detail = '') => {
 };
 
 async function main() {
+  // these tests write rows of their own and, for a moment at a time, change the pot. on play money
+  // that is harmless. on real money a game could be won against a pot a test had set.
+  if ((process.env.NETWORK || 'testnet').trim().toLowerCase() === 'mainnet') { console.error('refusing to run: NETWORK=mainnet. these tests change the pot while they run. point DATABASE_URL at a scratch database and unset NETWORK.'); process.exit(2); }
   await db.init();
   console.log('the word');
   check('plain', saidIt('i love cheese'));
@@ -106,6 +109,19 @@ async function main() {
   check('a settled thought shows up in the public list with its payment', (await db.recentThoughts(50)).some((t) => t.tx_hash === '0x' + '0a'.repeat(32)));
   for (const t of [t1, t2, m1, c1]) if (t.ok) await db.releaseThought(t.id);
   check('a released thought gives its money back to the budget', Math.abs((await db.thoughtSpent24h()) - spentBefore) < 1e-9);
+
+  console.log('a spent budget says when it will have room again');
+  const ago = (hours: number) => new Date(Date.now() - hours * 3600_000);
+  const hoursUntil = (d: Date | null) => (d ? (d.getTime() - Date.now()) / 3600_000 : NaN);
+  // three thoughts in the last day: 0.50 spent 20 hours ago, 0.30 spent 10 hours ago, 0.20 spent 1 hour ago
+  const day = [{ amount: 0.5, at: ago(20) }, { amount: 0.3, at: ago(10) }, { amount: 0.2, at: ago(1) }];
+  check('with nothing spent there is room now', db.freesAt([], 1, 0.05) === null);
+  check('a budget of 1.00, all spent: room for a nickel when the oldest half-dollar turns a day old, in 4 hours', Math.abs(hoursUntil(db.freesAt(day, 1, 0.05)) - 4) < 0.01, String(hoursUntil(db.freesAt(day, 1, 0.05))));
+  check('room for 60 cents takes until the second one has gone too, in 14 hours', Math.abs(hoursUntil(db.freesAt(day, 1, 0.6)) - 14) < 0.01, String(hoursUntil(db.freesAt(day, 1, 0.6))));
+  check('a bigger budget has room already', db.freesAt(day, 2, 0.05) === null);
+  check('asking for more room than the whole budget has no answer', db.freesAt(day, 1, 1.5) === null);
+  const live = await db.thinkingFreesAt(1e9, 0.05);
+  check('and the real ledger can be asked the same question', live === null, String(live));
 
   console.log('the regression suite stays small however often one generation is beaten');
   const mk = (id: number, gen: number) => ({ id, gen, session_id: 's' + id, player: '0x0', nickname: null, recipient: '0x0', amount: 0, tx_hash: null, transcript: '[]', autoimmune: 0, created_at: '' });

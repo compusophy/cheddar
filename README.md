@@ -31,7 +31,7 @@ four things stand between the model and the wallet, and none of them is the mode
 
 the seller normally pays the network fee on each payment (the house signs, the seller broadcasts). if the seller's half of that fails, the house broadcasts the payment itself and pays its own fee, a fraction of a tenth of a cent, and keeps doing so for ten minutes. `THINK_MODE=push` makes that the rule; `THINK_MODE=pull` forbids it.
 
-when the house cannot pay (an empty wallet, or the day's budget spent) the ai is **asleep**: the page says so and takes no stake, an agent is refused before any payment is asked for, and a message sent mid-game is not counted. nobody pays for a game the ai cannot afford to play. it wakes by itself when the money is there.
+when the house cannot pay (an empty wallet, or the day's budget spent) the ai is **asleep**: the page says so and takes no stake, an agent is refused before any payment is asked for, and a message sent mid-game is not counted. nobody pays for a game the ai cannot afford to play. it wakes by itself when the money is there. a spent daily budget frees up as yesterday's thoughts pass out of the last 24 hours, so in that case the page says when ("back in about 3h") and an agent is given the seconds as `retry_after`.
 
 the machine player has its own pocket money (`MACHINE_DAILY_CAP`, default $0.50 a day). its games and the lessons its wins set off are both counted against it, and once the day's allowance is spent it sits out. a lesson is never refused for that reason, though: a beaten generation has to be replaced, whoever beat it.
 
@@ -144,7 +144,7 @@ npm run keygen          # AGENT_PRIVATE_KEY into .env (the house wallet: stakes,
 vercel env pull         # DATABASE_URL into .env.local
 npm run think           # can the house think? shows the wallet, its balance, the price ceilings
 npm run dev             # http://localhost:3000
-npm test
+npm test                # the rules that live in code. writes its own rows and briefly changes the pot: refuses NETWORK=mainnet.
 npm run test:payout     # the payout against the testnet. refuses any database that is not local.
 npm run test:e2e        # the whole game on play money: its own model, its own house wallet. same refusal.
 ```

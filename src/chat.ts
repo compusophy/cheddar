@@ -67,7 +67,7 @@ export async function openSession(player: string, nickname: string | null, stake
     // before it sends one. a stake that is already on chain is still honoured below: the money moved.
     if (!stakeTx && flag('CLOSED')) return { status: 503, body: { error: 'closed for now. nothing was charged.' } };
     // asleep: the house cannot pay for the ai's thoughts right now, so it does not sell a game it cannot play.
-    if (!stakeTx) { const a = await awake(); if (!a.ok) return { status: 503, body: { error: `it is asleep: ${a.why}. nothing was charged.`, asleep: true } }; }
+    if (!stakeTx) { const a = await awake(); if (!a.ok) return { status: 503, body: { error: `it is asleep: ${a.why}. nothing was charged.`, asleep: true, ...(a.wakesIn ? { retry_after: a.wakesIn } : {}) } }; }
     if (!stakeTx || !/^0x[0-9a-fA-F]{64}$/.test(stakeTx)) return { status: 402, body: { error: 'stake required' } };
     const hash = stakeTx.toLowerCase(); // one transaction, one spelling
     if (await db.stakeSeen(hash)) return { status: 409, body: { error: 'that stake was already used' } };

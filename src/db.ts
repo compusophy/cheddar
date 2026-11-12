@@ -157,6 +157,23 @@ export const thoughtSpent24h = async (purpose?: string) => Number((purpose
   : await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE created_at > now() - interval '1 day'`)[0].t);
 /** everything the machine has cost today: its own games and the lessons its wins set off. */
 export const machineSpent24h = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE purpose IN ('machine', 'machine-lesson') AND created_at > now() - interval '1 day'`)[0].t);
+/**
+ * when the day's thinking budget will have room again. the budget is whatever was spent in the last
+ * 24 hours, so it frees up as old thoughts pass out of that window: this finds the moment enough of
+ * them have for `room` dollars to be spendable again. `spent` is the last day's thoughts, oldest
+ * first. null when there is room already.
+ */
+export function freesAt(spent: { amount: number; at: Date }[], cap: number, room: number): Date | null {
+  let left = spent.reduce((t, x) => t + Number(x.amount), 0);
+  if (left + room <= cap + 1e-9) return null;
+  for (const x of spent) {
+    left -= Number(x.amount);
+    if (left + room <= cap + 1e-9) return new Date(new Date(x.at).getTime() + 24 * 3600_000);
+  }
+  return null; // room is more than the whole budget: it never frees
+}
+export const thinkingFreesAt = async (cap: number, room: number) =>
+  freesAt(await sql<{ amount: number; at: Date }[]>`SELECT amount, created_at AS at FROM thoughts WHERE created_at > now() - interval '1 day' ORDER BY created_at, id`, cap, room);
 /** what thinking has cost, by purpose. */
 export async function thoughtBooks() {
   const rows = await sql<any[]>`SELECT purpose, COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS spent,

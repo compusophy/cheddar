@@ -129,7 +129,8 @@ export async function spendable(): Promise<{ balance: number; reserved: number; 
  * can the house think right now? asked before a stake is taken, so nobody pays for a game the ai
  * cannot afford to play, and again before every thought. cached briefly: it is read on every page load.
  */
-export type Awake = { ok: boolean; why: string | null; balance: number | null; reserved: number; available: number | null };
+/** `wakesIn` is seconds until it can think again, when that is known: a spent daily budget frees up by itself, an empty wallet does not. */
+export type Awake = { ok: boolean; why: string | null; balance: number | null; reserved: number; available: number | null; wakesIn?: number };
 let last: { at: number; value: Awake } | null = null;
 export async function awake(fresh = false): Promise<Awake> {
   if (!fresh && last && Date.now() - last.at < 20_000) return last.value;
@@ -141,6 +142,10 @@ export async function awake(fresh = false): Promise<Awake> {
       const m = await spendable();
       const why = spent >= THINK_DAILY_CAP ? "today's thinking budget is spent" : m.available < FLOOR ? 'out of thinking money' : null;
       value = { ok: !why, why, ...m };
+      if (spent >= THINK_DAILY_CAP) {
+        const at = await db.thinkingFreesAt(THINK_DAILY_CAP, Math.min(FLOOR, THINK_DAILY_CAP)).catch(() => null);
+        if (at) value.wakesIn = Math.max(1, Math.ceil((at.getTime() - Date.now()) / 1000));
+      }
     }
   } catch (e) {
     // could not read the balance: say so plainly rather than guess either way.

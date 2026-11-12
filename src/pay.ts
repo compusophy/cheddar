@@ -198,7 +198,7 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       if (claimed && playsFree(String(claimed))) return res.status(400).json({ error: 'address: that one is the machine\'s. use your own, or leave it out.' });
       // everything that could refuse the game is checked before any money is asked for.
       const up = await think.awake();
-      if (!up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true });
+      if (!up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true, ...(up.wakesIn ? { retry_after: up.wakesIn } : {}) });
       if (await db.lockSince('harden')) return res.status(503).json({ error: 'it is learning from a win. nothing was charged. try again in a minute.', retry_after: 30 });
       // a game the ai's learning cut short: its session id buys back the messages that were left. no charge.
       const prior = req.body?.session;
