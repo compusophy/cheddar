@@ -1,0 +1,30 @@
+/* the simple page: one column, a few words, one box to type in. */
+:root { color-scheme: dark; --bg: #0b0b0c; --fg: #f2f0ea; --dim: #8f8c84; --line: #26262a; --gold: #f4c430; }
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; justify-content: space-between; align-items: center; max-width: 34rem; margin: 0 auto; padding: 1rem; }
+main { max-width: 34rem; margin: 0 auto; padding: 0 1rem 3rem; }
+h1 { margin: 2rem 0 0; font-size: 1.9rem; line-height: 1.15; font-weight: 700; }
+.pot { margin: 0.4rem 0 1.5rem; font-size: 1.9rem; line-height: 1.15; font-weight: 700; color: var(--gold); }
+.dim { color: var(--dim); font-size: 0.9rem; }
+.said { min-height: 1.45em; margin: 0.75rem 0; color: var(--dim); }
+.hidden { display: none; }
+
+button { font: inherit; cursor: pointer; }
+#me { padding: 0.4rem 0.8rem; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--fg); }
+button.link { padding: 0; border: none; background: none; color: var(--dim); text-decoration: underline; }
+
+#thread { display: flex; flex-direction: column; gap: 0.5rem; }
+#thread p { max-width: 85%; margin: 0; padding: 0.6rem 0.8rem; border-radius: 1rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+#thread .me { align-self: flex-end; background: var(--gold); color: #000; }
+#thread .it { align-self: flex-start; background: #1a1a1d; }
+#thread .won { align-self: stretch; max-width: none; background: var(--gold); color: #000; font-weight: 700; text-align: center; }
+
+form { display: flex; gap: 0.5rem; }
+#msg { flex: 1; min-width: 0; padding: 0.8rem 1rem; border: 1px solid var(--line); border-radius: 999px; background: #121214; color: var(--fg); font: inherit; }
+#msg:focus { outline: none; border-color: var(--dim); }
+#send { padding: 0.8rem 1.3rem; border: none; border-radius: 999px; background: var(--gold); color: #000; font-weight: 700; }
+#send:disabled, #msg:disabled { opacity: 0.5; cursor: default; }
+
+details { margin-top: 2rem; color: var(--dim); font-size: 0.9rem; }
+summary { cursor: pointer; }

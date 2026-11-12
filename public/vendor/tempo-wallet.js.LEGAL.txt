@@ -13,5 +13,11 @@ Bundled license information:
 @noble/curves/esm/p256.js:
   /*! noble-curves - MIT License (c) 2022 Paul Miller (paulmillr.com) */
 
+@scure/base/lib/esm/index.js:
+  /*! scure-base - MIT License (c) 2022 Paul Miller (paulmillr.com) */
+
+@scure/bip32/lib/esm/index.js:
+  /*! scure-bip32 - MIT License (c) 2022 Patricio Palladino, Paul Miller (paulmillr.com) */
+
 @scure/bip39/esm/index.js:
   /*! scure-bip39 - MIT License (c) 2022 Patricio Palladino, Paul Miller (paulmillr.com) */

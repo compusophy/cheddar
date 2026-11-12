@@ -342,6 +342,23 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
     }
   });
 
+  /**
+   * a game, read back by whoever holds its session id: where it stands and what has been said. the id
+   * is the proof, as it is for saying something in the game. a page that was closed and opened again
+   * uses this to pick its game back up.
+   */
+  app.get('/api/agent/session/:id', async (req, res) => {
+    if (limited(req)) return res.status(429).json({ error: 'slow down' });
+    try {
+      const s = await db.getSession(String(req.params.id));
+      if (!s) return res.status(404).json({ error: 'no such game' });
+      const gen = await db.currentGeneration();
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ session: s.id, open: s.status === 'open' && s.gen === gen.gen, status: s.status, generation: s.gen,
+        turns_left: Math.max(0, MAX_TURNS - s.turns), playing_as: s.player, transcript: JSON.parse(s.transcript) });
+    } catch (e) { console.error('[agent] session', e); res.status(500).json({ error: 'something broke' }); }
+  });
+
   app.post('/api/agent/say', async (req, res) => {
     if (limited(req)) return res.status(429).json({ error: 'slow down' });
     try {

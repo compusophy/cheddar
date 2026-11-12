@@ -8,6 +8,7 @@
   "devDependencies": {
     "accounts": "0.21.1",
     "esbuild": "0.25.10",
+    "mppx": "0.18.0",
     "viem": "2.57.17"
   }
 }

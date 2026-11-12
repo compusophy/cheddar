@@ -277,10 +277,14 @@ async function main() {
   // it is pinned: rebuild it (npm run build in web/), read what changed, and only then move this hash.
   const walletLib = fs.readFileSync(path.join(process.cwd(), 'public', 'vendor', 'tempo-wallet.js'));
   const walletHash = crypto.createHash('sha384').update(walletLib).digest('base64');
-  check('the wallet bundle is the one that was built and read', walletHash === 'hMxHS3bDn8nJ/rcyb0FWnkrcYT3kKctbnKFfiiskxLYy0KDvWvkfBSDkIaCPvrUz', walletHash);
+  check('the wallet bundle is the one that was built and read', walletHash === 'zcyenmYxS9MHYNnZBQiTeAzCydl7KYEvmc8xEkgGPieOPHaJH9O/NmxLKMN9esII', walletHash);
   check('the page frames the wallet and nothing else', /(^|;)\s*frame-src https:\/\/wallet\.tempo\.xyz\s*(;|$)/.test(policy) && !/frame-src[^;]*(\*|'self'|http:)/.test(policy), policy);
   const pageJs = fs.readFileSync(path.join(process.cwd(), 'public', 'app.js'), 'utf8');
   check('and loads its code from here, when asked', /s\.src = '\/vendor\/tempo-wallet\.js'/.test(pageJs) && !/<script[^>]*tempo-wallet/.test(page));
+  // the simple page: the same rules. its own scripts only, nothing written into the page, the wallet loaded on demand.
+  const simple = fs.readFileSync(path.join(process.cwd(), 'public', 'simple.html'), 'utf8');
+  const simpleScripts = [...simple.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]);
+  check('the simple page loads its scripts from here too, and writes none into itself', simpleScripts.length === 1 && simpleScripts[0] === '/simple.js' && !/<script(?![^>]*\ssrc=)[^>]*>/i.test(simple) && !/\sstyle="/.test(simple), simpleScripts.join(' '));
   check('the library that holds the purse key is the published build of ethers 6.13.4, byte for byte', libHash === '6Zl0Pc8zjSz8KvmNeXRvUQgY4ryFb+BwDvKCmLYcBME0joAaru491tQgi9B7zsMM', libHash);
 
   console.log('a visitor is a network, not an address');
