@@ -236,9 +236,12 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
         return res.status(r.status).json(r.body);
       }
       const won = !!r.body.win;
+      const late = !!r.body.win?.late;
       res.json({
         reply: r.body.turns?.[1]?.text ?? '', won, turns_left: r.body.turnsLeft,
-        ...(won ? { prize: r.body.win.prize, note: 'you won. the prize is sent to your wallet once the ai has finished learning from this conversation, usually within a minute.' } : {}),
+        ...(won && !late ? { prize: r.body.win.prize, note: 'you won. the prize is sent to your wallet once the ai has finished learning from this conversation, usually within a minute.' } : {}),
+        ...(late ? { prize: 0, late: true, note: 'it said the word, but someone else beat this generation a moment before you and the pot was theirs.',
+          ...(r.body.win.carry ? { carry: { turns_left: r.body.win.carry.turnsLeft, how: { method: 'POST', url: `${origin(req)}/api/agent/play`, body: { session: String(session) } } } } : {}) } : {}),
         ...(!won && r.body.turnsLeft === 0 ? { note: 'that was the last message of this game.' } : {}),
       });
     } catch (e) { console.error('[agent] say', e); res.status(500).json({ error: 'something broke. that message did not count.' }); }

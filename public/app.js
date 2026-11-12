@@ -104,7 +104,9 @@ async function checkCarry() {
   paintAgain();
 }
 async function loadState() {
-  state = await api('/state');
+  // one failed request must not end the polling: on a phone the network drops all the time.
+  try { state = await api('/state'); }
+  catch { clearTimeout(poll); poll = setTimeout(loadState, 5000); return; }
   word = state.word;
   const learning = state.learning;
   $('#gen').textContent = learning ? 'learning…' : `gen ${state.gen}`;
@@ -332,7 +334,8 @@ $('#form').addEventListener('submit', async (e) => {
     const reply = r.turns?.find((t) => t.role === 'agent');
     if (reply) { if (!it) it = bubble('it', ''); it.innerHTML = highlight(reply.text); }
     session.turnsLeft = r.turnsLeft;
-    if (r.win) { const before = balance; celebrate(r.win.prize); status('it is learning…', 'busy'); end(); watchPayout(before); }
+    if (r.win && r.win.late) { note('it said it. but someone else beat it a moment before you, and the pot was theirs.' + (r.win.carry ? ' the messages you had left carry over.' : '')); status('it is learning…', 'busy'); end(); }
+    else if (r.win) { const before = balance; celebrate(r.win.prize); status('it is learning…', 'busy'); end(); watchPayout(before); }
     else if (r.turnsLeft === 0) { note('that is the end of this conversation.'); status(''); end(); }
     else status('');
   } catch (err) {
@@ -453,4 +456,5 @@ $('#restorego').onclick = () => {
   location.reload();
 };
 
-loadState().then(() => { describeMoney(); fillIfEmpty(); resumeIfOpen(); });
+// start up once the game's state is known; until then keep asking.
+(async () => { await loadState(); while (!state) { await sleep(2000); await loadState(); } describeMoney(); fillIfEmpty(); resumeIfOpen(); })();

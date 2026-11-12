@@ -133,14 +133,25 @@ export async function abandon(sessionId: string) {
 export async function runChat(sessionId: string, message: string, onDelta?: (t: string) => void): Promise<ChatResult & { hardening?: Promise<void> }> {
   if (typeof message !== 'string' || !message.trim()) return { status: 400, body: { error: 'say something' } };
   if (message.length > MAX_MESSAGE_CHARS) return { status: 400, body: { error: `${MAX_MESSAGE_CHARS} characters max` } };
-  const s = await db.getSession(String(sessionId));
-  if (!s) return { status: 404, body: { error: 'no such session' } };
-  if (s.status !== 'open') return { status: 409, body: { error: `session is ${s.status}` } };
+  const seen = await db.getSession(String(sessionId));
+  if (!seen) return { status: 404, body: { error: 'no such session' } };
+  if (seen.status !== 'open') return { status: 409, body: { error: `session is ${seen.status}` } };
   if (await db.lockSince(LOCK)) return { status: 503, body: { error: 'it is learning. try again in a minute.' } };
   // a win it has not learned from yet (the lesson was cut short, or could not be paid for) leaves a
   // beaten generation with its winning conversation in public view. nobody plays that generation:
   // the lesson is picked back up here, and the caller is told to come back.
   if (await db.unfinishedWin()) return { status: 503, body: { error: 'it lost a moment ago and is about to learn from it. try again in a minute.' }, hardening: resumeHardening() };
+  // one message at a time in a game. everything below reads the game again, now that nothing else can change it.
+  if (!(await db.beginTurn(seen.id))) return { status: 429, body: { error: 'one message at a time: wait for the reply.', retryIn: 2 } };
+  try {
+    return await turn((await db.getSession(seen.id))!, message.trim(), onDelta);
+  } finally {
+    await db.endTurn(seen.id).catch(() => {});
+  }
+}
+
+/** one exchange in a game that is known to be open and held by this request. */
+async function turn(s: db.SessionRow, message: string, onDelta?: (t: string) => void): Promise<ChatResult & { hardening?: Promise<void> }> {
   const gen = await db.currentGeneration();
   if (s.gen !== gen.gen) {
     await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'stale');
@@ -162,10 +173,10 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
 
   const history: Turn[] = JSON.parse(s.transcript);
   const preamble = about(gen.gen, await db.jackpot());
-  const purpose = FREE_PLAYERS.has(s.player) ? 'machine' as const : 'chat' as const;
+  const free = FREE_PLAYERS.has(s.player);
   let produced: Turn[];
   try {
-    produced = onDelta ? await stepStream(gen.policy, history, message.trim(), onDelta, preamble, purpose) : await step(gen.policy, history, message.trim(), preamble, purpose);
+    produced = onDelta ? await stepStream(gen.policy, history, message, onDelta, preamble, free ? 'machine' : 'chat') : await step(gen.policy, history, message, preamble, free ? 'machine' : 'chat');
   } catch (e) {
     // it could not pay for this thought. the turn was not taken and the game stays open.
     if (e instanceof Broke) { console.warn(`[chat] broke: ${e.message}`); return { status: 503, body: { error: 'it cannot afford to think right now. your game is still open and that message did not count.', asleep: true } }; }
@@ -175,12 +186,15 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
   const turns = s.turns + 1;
 
   if (saidIt(produced[1]?.text || '')) {
-    const free = FREE_PLAYERS.has(s.player);
-    // claim the pot now (atomically, so two simultaneous wins cannot both take it); pay after learning.
-    const prize = free ? 0 : await db.claimJackpot();
-    await db.updateSession(s.id, transcript, turns, 'won');
-    const winId = await db.recordBreach({ gen: gen.gen, session_id: s.id, player: s.player, nickname: s.nickname, recipient: s.player, amount: prize, tx_hash: null, transcript: JSON.stringify(transcript) });
-    return { status: 200, body: { turns: produced, turnsLeft: 0, win: { id: winId, prize } }, hardening: runHardening(gen, winId, prize) };
+    // the pot, the end of the game and the record of the win, in one step. paid after it has learned.
+    const w = await db.recordWin({ gen: gen.gen, sessionId: s.id, player: s.player, nickname: s.nickname, transcript, turns, paying: !free });
+    const hardening = runHardening(gen, w.winId, w.prize);
+    if (w.late) {
+      const left = MAX_TURNS - turns;
+      return { status: 200, hardening, body: { turns: produced, turnsLeft: 0,
+        win: { id: w.winId, prize: 0, late: true, ...(left > 0 ? { carry: { turnsLeft: left } } : {}) } } };
+    }
+    return { status: 200, hardening, body: { turns: produced, turnsLeft: 0, win: { id: w.winId, prize: w.prize } } };
   }
 
   await db.updateSession(s.id, transcript, turns, turns >= MAX_TURNS ? 'exhausted' : 'open');

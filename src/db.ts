@@ -44,6 +44,10 @@ export function init(): Promise<void> {
     // how much of a win has left the house so far. a prize bigger than a daily cap is paid in parts.
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS paid DOUBLE PRECISION NOT NULL DEFAULT 0`;
     await sql`ALTER TABLE generations ADD COLUMN IF NOT EXISTS lesson TEXT`;
+    // one message at a time in a game: set while a reply is being produced, cleared when it is done.
+    await sql`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS busy_until TIMESTAMPTZ`;
+    // the win that took the pot for its generation. there is at most one per generation.
+    await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS took_pot INT NOT NULL DEFAULT 0`;
     // a payment towards a win: which win, the moment after which its transaction can never land, and
     // whether the chain has confirmed it. a row with a hash and no confirmation is a payment in flight.
     await sql`ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS win_id INT`;
@@ -248,6 +252,42 @@ export async function recordBreach(b: Omit<Breach, 'id' | 'created_at' | 'autoim
 export const lessonStarted = async (id: number) => Number((await sql<{ attempts: number }[]>`UPDATE breaches SET attempts = attempts + 1 WHERE id = ${id} RETURNING attempts`)[0]?.attempts ?? 1);
 /** it stopped for want of money, not for want of time: that start does not count against it. */
 export const lessonPaused = (id: number) => sql`UPDATE breaches SET attempts = GREATEST(attempts - 1, 0) WHERE id = ${id}`;
+/**
+ * one message at a time in a game. without this, several messages sent at the same moment were each
+ * answered and together counted as one: more replies than the stake paid for, and a transcript that
+ * kept only one of them. the flag is taken before the model is asked and given back after; it also
+ * expires by itself, so a function that dies mid-reply cannot lock a game for good.
+ */
+export const beginTurn = async (id: string) =>
+  (await sql`UPDATE sessions SET busy_until = now() + interval '150 seconds' WHERE id = ${id} AND status = 'open' AND (busy_until IS NULL OR busy_until < now()) RETURNING id`).length > 0;
+export const endTurn = (id: string) => sql`UPDATE sessions SET busy_until = NULL WHERE id = ${id}`;
+
+/**
+ * a win, recorded in one step: the pot is taken, the game is closed and the win is written down
+ * together or not at all. done apart, a function dying between them could empty the pot with no win
+ * on record.
+ *
+ * winners are let through one at a time, and only the first paying player to beat a generation takes
+ * its pot. several games can be mid-reply at the moment one of them wins; if each later one also
+ * "took the pot", each would collect the fresh seed, and a player with one working trick and many
+ * purses could farm it. a later winner is told the truth: someone beat it a moment before. their
+ * game is treated as interrupted, so the messages they had left carry over. the machine never takes
+ * the pot and never stands in a player's way.
+ */
+export async function recordWin(o: { gen: number; sessionId: string; player: string; nickname: string | null; transcript: unknown[]; turns: number; paying: boolean }): Promise<{ winId: number; prize: number; late: boolean }> {
+  return sql.begin(async (tx) => {
+    const [pot] = await tx<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1 FOR UPDATE`;
+    const already = o.paying && (await tx`SELECT 1 FROM breaches WHERE gen = ${o.gen} AND took_pot = 1 LIMIT 1`).length > 0;
+    const takes = o.paying && !already;
+    const prize = takes ? Math.round(Number(pot.amount) * 1e6) / 1e6 : 0;
+    if (takes) await tx`UPDATE jackpot SET amount = ${JACKPOT_SEED} WHERE id = 1`;
+    const text = JSON.stringify(o.transcript);
+    await tx`UPDATE sessions SET transcript = ${text}, turns = ${o.turns}, status = ${already ? 'stale' : 'won'}, busy_until = NULL, updated_at = now() WHERE id = ${o.sessionId}`;
+    const [r] = await tx<{ id: number }[]>`INSERT INTO breaches (gen, session_id, player, nickname, recipient, amount, tx_hash, transcript, took_pot)
+      VALUES (${o.gen}, ${o.sessionId}, ${o.player}, ${o.nickname}, ${o.player}, ${prize}, NULL, ${text}, ${takes ? 1 : 0}) RETURNING id`;
+    return { winId: r.id, prize, late: already };
+  }) as any;
+}
 export const markAutoimmune = (id: number) => sql`UPDATE breaches SET autoimmune = 1 WHERE id = ${id}`;
 export const allBreaches = () => sql<Breach[]>`SELECT * FROM breaches ORDER BY id ASC`;
 export const breachesForGen = (gen: number) => sql<Breach[]>`SELECT * FROM breaches WHERE gen = ${gen} ORDER BY id ASC`;

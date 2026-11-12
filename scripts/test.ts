@@ -133,6 +133,49 @@ async function main() {
   check('a start that stopped for want of money is not counted', (await db.lessonStarted(lessonWin)) === 2);
   await db.sql`DELETE FROM breaches WHERE id = ${lessonWin}`;
 
+  console.log('one message at a time in a game');
+  const tp = '0x00000000000000000000000000000000000000e1';
+  await db.createSession('turn-test', 0, tp, null);
+  check('the first message takes the game', await db.beginTurn('turn-test'));
+  check('a second one, sent before the reply, is turned away', !(await db.beginTurn('turn-test')));
+  await db.endTurn('turn-test');
+  check('after the reply the game is free again', await db.beginTurn('turn-test'));
+  await db.sql`UPDATE sessions SET busy_until = now() - interval '1 second' WHERE id = 'turn-test'`;
+  check('a reply that never came does not hold the game for ever', await db.beginTurn('turn-test'));
+  await db.updateSession('turn-test', [], 1, 'won');
+  check('a game that is over takes no more messages', !(await db.beginTurn('turn-test')));
+  await db.sql`DELETE FROM sessions WHERE id = 'turn-test'`;
+
+  console.log('a win is recorded in one step, and one generation gives up its pot once');
+  const G = 9000 + Math.floor(Math.random() * 900); // a generation number nothing else uses
+  const [w1, w2, wm] = ['0x00000000000000000000000000000000000000e2', '0x00000000000000000000000000000000000000e3', '0x00000000000000000000000000000000000000e4'];
+  for (const [id, p] of [['win-a', w1], ['win-b', w2], ['win-m', wm], ['win-c', w1], ['win-d', w2]] as const) { await db.createSession(id, G, p, null); await db.recordStake(id, p, 0.25, '0x' + Buffer.from(id.padEnd(32, '.')).toString('hex'), 0); }
+  const potWas = await db.jackpot();
+  await db.sql`UPDATE jackpot SET amount = 7.5 WHERE id = 1`;
+  const m = await db.recordWin({ gen: G, sessionId: 'win-m', player: wm, nickname: null, transcript: [], turns: 3, paying: false });
+  check('the machine wins nothing, and the pot stays where it is', m.prize === 0 && !m.late && Math.abs((await db.jackpot()) - 7.5) < 1e-9, JSON.stringify(m));
+  const [ra, rb] = await Promise.all([
+    db.recordWin({ gen: G, sessionId: 'win-a', player: w1, nickname: null, transcript: [], turns: 4, paying: true }),
+    db.recordWin({ gen: G, sessionId: 'win-b', player: w2, nickname: null, transcript: [], turns: 6, paying: true }),
+  ]);
+  const firsts = [ra, rb].filter((x) => !x.late), lates = [ra, rb].filter((x) => x.late);
+  check('two players win at the same moment: one takes the pot', firsts.length === 1 && Math.abs(firsts[0].prize - 7.5) < 1e-9, JSON.stringify([ra, rb]));
+  check('the other is late, and takes nothing', lates.length === 1 && lates[0].prize === 0, JSON.stringify([ra, rb]));
+  check('the pot is reseeded once, not handed out again', Math.abs((await db.jackpot()) - JACKPOT_SEED) < 1e-9, String(await db.jackpot()));
+  const lateId = ra.late ? 'win-a' : 'win-b', firstId = ra.late ? 'win-b' : 'win-a';
+  check('the winner\'s game is won', (await db.getSession(firstId))?.status === 'won');
+  check('the late one\'s game counts as interrupted, so what was left of it carries over', (await db.getSession(lateId))?.status === 'stale' && (await db.carryFor(ra.late ? w1 : w2, 25))?.id === lateId);
+  const again2 = await db.recordWin({ gen: G, sessionId: ra.late ? 'win-d' : 'win-c', player: ra.late ? w2 : w1, nickname: null, transcript: [], turns: 2, paying: true });
+  check('any later win against that generation is late too', again2.late && again2.prize === 0);
+  const next = await db.recordWin({ gen: G + 1, sessionId: ra.late ? 'win-c' : 'win-d', player: ra.late ? w1 : w2, nickname: null, transcript: [], turns: 2, paying: true });
+  check('the next generation has its own pot to give', !next.late && Math.abs(next.prize - JACKPOT_SEED) < 1e-9, JSON.stringify(next));
+  const owedNow = await db.sql<{ n: number; t: number }[]>`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS t FROM breaches WHERE gen IN (${G}, ${G + 1})`;
+  check('all told, what was won is the pot and one seed, whatever the number of wins', owedNow[0].n === 5 && Math.abs(owedNow[0].t - (7.5 + JACKPOT_SEED)) < 1e-9, JSON.stringify(owedNow[0]));
+  await db.sql`DELETE FROM breaches WHERE gen IN (${G}, ${G + 1})`;
+  await db.sql`DELETE FROM stakes WHERE session_id LIKE 'win-%'`;
+  await db.sql`DELETE FROM sessions WHERE id LIKE 'win-%'`;
+  await db.sql`UPDATE jackpot SET amount = ${potWas} WHERE id = 1`;
+
   console.log('prize money that has not left the house is counted as owed');
   const owedBefore = await db.owedTotal();
   await db.createSession('owed-total-test', 0, '0x00000000000000000000000000000000000000a9', null);
