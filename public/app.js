@@ -159,7 +159,7 @@ function receipt(after, paid, into = thread()) {
   const el = document.createElement(tx ? 'a' : 'div');
   el.className = 'receipt';
   el.textContent = `it paid ${small(paid.cost)} for that`;
-  if (tx) { el.href = `${state.thinks.explorer}/tx/${tx}`; el.target = '_blank'; el.rel = 'noopener noreferrer'; el.title = 'the payment that bought this reply'; }
+  if (tx) { el.href = `${state.thinks.explorer}/receipt/${tx}`; el.target = '_blank'; el.rel = 'noopener noreferrer'; el.title = 'the receipt for the payment that bought this reply'; }
   if (after && after.parentNode === into) after.after(el); else into.appendChild(el);
   scrollDown();
 }
@@ -322,10 +322,24 @@ async function saveName(name, btn) {
   } catch (e) { if (btn) { btn.disabled = false; btn.textContent = 'claim it'; } status(e.message, 'bad'); }
 }
 /** after a win: watch the purse until the pot lands, then make it count up. */
-async function watchPayout(before) {
+async function watchPayout(before, winId) {
   for (let i = 0; i < 40; i++) {
     await sleep(6000); await readBalance();
-    if (balance > before) { tween($('#bal'), before, balance, 1000); pop($('#purse')); $('#cashbal').textContent = money(balance); status('paid.', 'ok'); chime(); return; }
+    if (balance > before) {
+      tween($('#bal'), before, balance, 1000); pop($('#purse')); $('#cashbal').textContent = money(balance); status('paid.', 'ok');
+      try { chime(); } catch { /* a sound the browser would not play is no reason to stop here */ }
+      // the prize is a payment like any other: link its receipt under the win.
+      try {
+        const w = await api('/win/' + winId);
+        if (w.receipt && /^https:\/\//.test(w.receipt)) {
+          const a = document.createElement('a');
+          a.className = 'receipt paid'; a.href = w.receipt; a.target = '_blank'; a.rel = 'noopener noreferrer';
+          a.textContent = `${money(w.paid)} paid to you`;
+          (document.querySelector('#thread .win:last-of-type') || thread()).appendChild(a);
+        }
+      } catch { /* the money arrived; the link is a nicety */ }
+      return;
+    }
   }
 }
 
@@ -351,7 +365,7 @@ $('#form').addEventListener('submit', async (e) => {
     if (reply) { if (!it) it = bubble('it', ''); it.innerHTML = highlight(reply.text); receipt(it, reply.paid); }
     session.turnsLeft = r.turnsLeft;
     if (r.win && r.win.late) { note('it said it. but someone else beat it a moment before you, and the pot was theirs.' + (r.win.carry ? ' the messages you had left carry over.' : '')); status('it is learning…', 'busy'); end(); }
-    else if (r.win) { const before = balance; celebrate(r.win.prize); status('it is learning…', 'busy'); end(); watchPayout(before); }
+    else if (r.win) { const before = balance; celebrate(r.win.prize); status('it is learning…', 'busy'); end(); watchPayout(before, r.win.id); }
     else if (r.turnsLeft === 0) { note('that is the end of this conversation.'); status(''); end(); }
     else status('');
   } catch (err) {
@@ -387,13 +401,17 @@ $('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHT
 
 // history: a ledger of defeats. each row is a generation, the line that killed it, and what it learned.
 async function loadHistory() {
-  const [{ generations, wins, totals, board }, th] = await Promise.all([api('/history'), api('/thoughts').catch(() => null)]);
+  const [{ generations, wins, totals, board, explorer }, th] = await Promise.all([api('/history'), api('/thoughts').catch(() => null)]);
+  // a prize that has been paid links to its receipt.
+  const prizeOf = (w) => /^0x[0-9a-fA-F]{64}$/.test(w.tx || '') && explorer
+    ? `<a class="prize" href="${esc(explorer)}/receipt/${esc(w.tx)}" target="_blank" rel="noopener noreferrer" title="the receipt for this prize">${money(w.prize)}</a>`
+    : `<span class="prize">${money(w.prize)}</span>`;
   const byId = Object.fromEntries(wins.map((w) => [w.id, w]));
   // `wins` holds only the conversations shown below; the counts come already added up.
   const won = Number(totals?.wins ?? wins.length), paid = Number(totals?.paid ?? 0);
   // one line of facts that wraps where it has to: five cells of ten characters do not fit a phone, or even the page.
   const thinking = th && th.thoughts
-    ? ` · <a ${th.recent[0]?.tx ? `href="${esc(th.explorer)}/tx/${esc(th.recent[0].tx)}" target="_blank" rel="noopener noreferrer"` : ''} title="what it has paid for its own replies. the link is its latest payment.">${small(th.spent)} on thinking</a>`
+    ? ` · <a ${th.recent[0]?.tx ? `href="${esc(th.explorer)}/receipt/${esc(th.recent[0].tx)}" target="_blank" rel="noopener noreferrer"` : ''} title="what it has paid for its own replies. the link is its latest payment.">${small(th.spent)} on thinking</a>`
     : '';
   $('#histstrip').innerHTML = `<div class="cell sum"><b>gen ${Number(state?.gen ?? generations.length - 1)}</b> · ${won} win${won === 1 ? '' : 's'} · ${money(paid)} paid${thinking}</div>`;
 
@@ -409,7 +427,7 @@ async function loadHistory() {
     const replay = w ? w.transcript.map((t) => `<div class="mini ${t.role === 'user' ? 'me' : 'it'}">${t.role === 'user' ? esc(t.text) : highlight(t.text)}</div>`).join('') : '';
     return `<details class="gen-card" ${i === 0 ? 'open' : ''}>
       <summary>
-        <div class="line"><b>gen ${g.gen}</b><span class="meta">${g.gen === 0 ? 'where it started' : `beaten by ${esc(w?.nickname || 'someone')}`}</span>${flags}${w && w.prize ? `<span class="prize">${money(w.prize)}</span>` : ''}</div>
+        <div class="line"><b>gen ${g.gen}</b><span class="meta">${g.gen === 0 ? 'where it started' : `beaten by ${esc(w?.nickname || 'someone')}`}</span>${flags}${w && w.prize ? prizeOf(w) : ''}</div>
         ${kill ? `<div class="kill">${esc(kill)}</div>` : ''}
       </summary>
       <div class="body">

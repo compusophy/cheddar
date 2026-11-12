@@ -192,3 +192,8 @@ a.receipt::after { content: ' ↗'; }
 .cell.sum b { color: var(--fg); }
 .cell.sum a { color: inherit; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
 .cell.sum a:hover, .cell.sum a:focus-visible { color: var(--gold); }
+
+/* a prize that has been paid links to its receipt, in the history and under the win itself. */
+a.prize { text-decoration: none; }
+a.prize::after { content: ' ↗'; }
+.win .receipt.paid { display: block; margin: var(--h) 0 0; color: var(--green); font-size: 1em; }

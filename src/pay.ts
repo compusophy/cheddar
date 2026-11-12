@@ -255,8 +255,8 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       res.json({
         reply: r.body.turns?.[1]?.text ?? '', won, turns_left: r.body.turnsLeft,
         // what the house paid for this reply, and the transaction that paid it.
-        ...(r.body.turns?.[1]?.paid ? { it_paid: { ...r.body.turns[1].paid, explorer: think.describe().explorer } } : {}),
-        ...(won && !late ? { prize: r.body.win.prize, note: 'you won. the prize is sent to your wallet once the ai has finished learning from this conversation, usually within a minute.' } : {}),
+        ...(r.body.turns?.[1]?.paid ? { it_paid: { ...r.body.turns[1].paid, ...(r.body.turns[1].paid.tx ? { receipt: `${think.describe().explorer}/receipt/${r.body.turns[1].paid.tx}` } : {}) } } : {}),
+        ...(won && !late ? { prize: r.body.win.prize, prize_status: `${origin(req)}/api/win/${r.body.win.id}`, note: 'you won. the prize is sent to your wallet once the ai has finished learning from this conversation, usually within a minute. prize_status says when it has been paid, with its receipt.' } : {}),
         ...(late ? { prize: 0, late: true, note: 'it said the word, but someone else beat this generation a moment before you and the pot was theirs.',
           ...(r.body.win.carry ? { carry: { turns_left: r.body.win.carry.turnsLeft, how: { method: 'POST', url: `${origin(req)}/api/agent/play`, body: { session: String(session) } } } } : {}) } : {}),
         ...(!won && r.body.turnsLeft === 0 ? { note: 'that was the last message of this game.' } : {}),

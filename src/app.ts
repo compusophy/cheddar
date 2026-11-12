@@ -92,7 +92,9 @@ app.get('/api/history', async (_req, res) => {
   const body = {
     generations: gens,
     totals,
-    wins: wins.map((w) => ({ id: w.id, gen: w.gen, nickname: w.nickname, prize: w.amount, paid: !!w.tx_hash, autoimmune: !!w.autoimmune, at: w.created_at,
+    // where a prize's payment can be looked up. `tx` is on a win once the whole prize has left the house.
+    explorer: net.explorer,
+    wins: wins.map((w) => ({ id: w.id, gen: w.gen, nickname: w.nickname, prize: w.amount, paid: !!w.tx_hash, tx: w.tx_hash, autoimmune: !!w.autoimmune, at: w.created_at,
       transcript: JSON.parse(w.transcript) })),
     board: board.map((r: any) => ({ nickname: r.nickname, wins: r.breaches, won: r.stolen, highest_gen: r.highest_gen })),
   };
@@ -103,6 +105,18 @@ app.get('/api/history', async (_req, res) => {
 app.get('/api/balance/:address', async (req, res) => {
   if (!isAddress(req.params.address)) return res.status(400).json({ error: 'bad wallet' });
   res.json({ balance: await treasury.balance(req.params.address as `0x${string}`) });
+});
+/**
+ * one win and whether its prize has been paid. the winner's page asks this once the money shows up,
+ * to link the payment; an agent that won can ask it to see where its prize stands.
+ */
+app.get('/api/win/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  const w = Number.isInteger(id) && id > 0 ? await db.breachById(id) : null;
+  if (!w) return res.status(404).json({ error: 'no such win' });
+  const owed = w.tx_hash ? 0 : Math.max(0, Math.round((Number(w.amount) - Number(w.paid ?? 0)) * 1e6) / 1e6);
+  res.json({ id: w.id, generation: w.gen, prize: w.amount, paid: Math.round((Number(w.amount) - owed) * 1e6) / 1e6, still_owed: owed,
+    tx: w.tx_hash, receipt: w.tx_hash ? `${net.explorer}/receipt/${w.tx_hash}` : null });
 });
 /** what the ai has been paying for its own thoughts. each one is a transaction; this is just the list. */
 app.get('/api/thoughts', async (_req, res) => {

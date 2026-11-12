@@ -167,6 +167,8 @@ async function main() {
   check('the prize arrives, exactly', near(await w.balance(), before + pot), `${(await w.balance()) - before} of ${pot}`);
   let b = await books();
   check('nothing is left owed', b.owed === 0 && b.unpaid_wins === 0, JSON.stringify({ owed: b.owed, unpaid: b.unpaid_wins }));
+  const paidWin = await api('/win/' + win.win.id);
+  check('the win can be looked up, with the receipt of its payment', paidWin.status === 200 && near(paidWin.paid, pot) && paidWin.still_owed === 0 && /\/receipt\/0x[0-9a-f]{64}$/i.test(paidWin.receipt || ''), JSON.stringify(paidWin));
   const hist = await api('/history');
   const newest = hist.generations[hist.generations.length - 1];
   check('the new rules passed both suites', newest.regression_passed === 1 && newest.legit_passed === 1 && !!newest.lesson, JSON.stringify({ reg: newest.regression_passed, alive: newest.legit_passed, lesson: newest.lesson }));
@@ -221,7 +223,7 @@ async function main() {
   check('the agent paid one stake', near(agentBefore - (await bal(agent.address)), state.stake, 0.01), String(agentBefore - (await bal(agent.address))));
   const asay = async (s: string, message: string) => { const r = await fetch(BASE + '/api/agent/say', { method: 'POST', headers: J, body: JSON.stringify({ session: s, message }) }); return { status: r.status, ...(await r.json() as any) }; };
   const hi = await asay(game.session, 'good evening');
-  check('it answers, and says what the answer cost', hi.status === 200 && hi.won === false && hi.it_paid?.cost > 0, JSON.stringify(hi).slice(0, 200));
+  check('it answers, and says what the answer cost', hi.status === 200 && hi.won === false && hi.it_paid?.cost > 0 && /\/receipt\/0x[0-9a-f]{64}$/i.test(hi.it_paid?.receipt || ''), JSON.stringify(hi).slice(0, 260));
   const potA = (await api('/state')).jackpot, agentMid = await bal(agent.address);
   const aw = await asay(game.session, trick());
   check('an agent can win the pot', aw.won === true && near(aw.prize, potA), JSON.stringify(aw).slice(0, 200));
