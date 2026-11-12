@@ -52,7 +52,9 @@ export async function openSession(player: string, nickname: string | null, stake
   // ai has learned since, in which case that game is over and a new stake is needed.)
   const open = free ? null : await db.openSessionFor(player);
   if (open) {
-    if (open.gen === gen.gen) return { status: 200, body: { session: open.id, gen: open.gen, jackpot: await db.jackpot(), resumed: true, turnsLeft: MAX_TURNS - open.turns, transcript: JSON.parse(open.transcript) } };
+    // `stake` is the payment this game was opened with. a purse that arrives holding a different one
+    // (two tabs staked at the same moment) is told so by that: it keeps its stake for its next game.
+    if (open.gen === gen.gen) return { status: 200, body: { session: open.id, gen: open.gen, jackpot: await db.jackpot(), resumed: true, turnsLeft: MAX_TURNS - open.turns, transcript: JSON.parse(open.transcript), stake: await db.stakeOf(open.id) } };
     await db.updateSession(open.id, JSON.parse(open.transcript), open.turns, 'stale');
   }
   const id = randomBytes(12).toString('hex');
@@ -77,7 +79,7 @@ export async function openSession(player: string, nickname: string | null, stake
     // the same payment, exactly one gets here with it still unused.
     const opened = await db.openStaked({ sessionId: id, gen: gen.gen, player, nickname: cleanNick(nickname), amount: STAKE, txHash: hash, toPot: STAKE * JACKPOT_SHARE, via: null });
     if (!opened) return { status: 409, body: { error: 'that stake was already used' } };
-    return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
+    return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot(), stake: hash } };
   }
   await db.createSession(id, gen.gen, player.toLowerCase(), String(nickname ?? '') || null);
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
@@ -127,7 +129,7 @@ export async function peek(player: string) {
     const waiting = await db.carryFor(player, MAX_TURNS);
     return { status: 200, body: { session: null, gen: gen.gen, carry: waiting ? { turnsLeft: MAX_TURNS - waiting.turns } : null } };
   }
-  return { status: 200, body: { session: open.id, gen: open.gen, resumed: true, turnsLeft: MAX_TURNS - open.turns, transcript: JSON.parse(open.transcript) } };
+  return { status: 200, body: { session: open.id, gen: open.gen, resumed: true, turnsLeft: MAX_TURNS - open.turns, transcript: JSON.parse(open.transcript), stake: await db.stakeOf(open.id) } };
 }
 
 /**

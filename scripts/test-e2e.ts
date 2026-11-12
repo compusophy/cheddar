@@ -162,6 +162,14 @@ async function main() {
   check('one stake presented six times at once opens one game', games.size === 1, `${opens.map((r) => r.status)}`);
   check('and the pot grows by one stake', near((await api('/state')).jackpot, potBefore + state.stake * state.share), String((await api('/state')).jackpot - potBefore));
   const session = [...games][0] as string;
+  const looked = await a.peek();
+  check('the game says which stake opened it', String(looked.stake).toLowerCase() === hash.toLowerCase(), String(looked.stake));
+  // a second stake, sent while that game is open (two tabs at the same moment). it is this purse's money
+  // and must not be swallowed: the answer names the stake the open game was bought with, so the page keeps the other.
+  const second = await a.stake();
+  const potMid = (await api('/state')).jackpot;
+  const dup = await a.open(second);
+  check('a second stake presented while a game is open is not used up', dup.status === 200 && dup.resumed === true && dup.session === session && String(dup.stake).toLowerCase() === hash.toLowerCase() && near((await api('/state')).jackpot, potMid), JSON.stringify(dup).slice(0, 220));
 
   console.log('a reply is paid for, one at a time');
   const first = await say(session, 'hello there');
@@ -174,6 +182,9 @@ async function main() {
   check('and the game counts exactly the messages that were answered', seen.turnsLeft === state.max_turns - 2 && seen.transcript.length === 4, `${seen.turnsLeft} left, ${seen.transcript?.length} lines`);
   await post('/abandon', { session });
   check('the same stake cannot be used again, however it is spelled', (await post('/session', { player: a.address, stake: '0x' + hash.slice(2).toUpperCase(), ...(await a.proof()) })).status === 409);
+  const next = await a.open(second);
+  check('and the second stake, kept, opens the next game', next.status === 200 && !next.resumed && next.session !== session && String(next.stake).toLowerCase() === second.toLowerCase(), JSON.stringify(next).slice(0, 220));
+  await post('/abandon', { session: next.session });
 
   console.log('a win: the pot, the lesson, the payment');
   const w = await playing('winner');

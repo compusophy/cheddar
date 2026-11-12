@@ -31,7 +31,7 @@ app.use((_req, _res, next) => clock.enter(() => next()));
 // game. the reason goes to the log, where the operator is; a visitor is told only that it is down.
 app.use(async (_req, res, next) => {
   try { await db.init(); next(); }
-  catch (e) { console.error('[db] not started:', (e as Error).message); res.status(503).json({ error: 'the game is down: its ledger would not start. nothing was charged.', down: true }); }
+  catch (e) { console.error('[db] not started:', (e as Error).message); res.status(503).json({ error: 'the game is down: its ledger would not start. try again in a moment.', down: true }); }
 });
 
 /**

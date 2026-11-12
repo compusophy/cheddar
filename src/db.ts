@@ -372,6 +372,9 @@ export async function faucetWaits(player: string): Promise<number> {
 export const wonLast24h = async (player: string) =>
   Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM breaches WHERE player = ${player.toLowerCase()} AND paid_at > now() - interval '1 day'`)[0].t);
 export const stakeSeen = async (txHash: string) => (await sql`SELECT 1 FROM stakes WHERE lower(tx_hash) = ${txHash.toLowerCase()} LIMIT 1`).length > 0;
+/** the payment a game was opened with. the page lets go of a stake it is holding only when told it is this one. */
+export const stakeOf = async (sessionId: string): Promise<string | null> =>
+  (await sql<{ tx_hash: string }[]>`SELECT tx_hash FROM stakes WHERE session_id = ${sessionId} ORDER BY id ASC LIMIT 1`)[0]?.tx_hash ?? null;
 /** the game a payment bought, if it has bought one. */
 export const sessionOfStake = async (txHash: string): Promise<string | null> =>
   (await sql<{ session_id: string }[]>`SELECT session_id FROM stakes WHERE lower(tx_hash) = ${txHash.toLowerCase()} LIMIT 1`)[0]?.session_id ?? null;

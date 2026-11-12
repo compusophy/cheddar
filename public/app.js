@@ -229,10 +229,44 @@ let typing = null;
 const showTyping = () => { typing = bubble('it typing', '<i></i><i></i><i></i>'); };
 const hideTyping = () => { typing?.remove(); typing = null; };
 
-/** the stake: the purse pays the house before the first message. */
-async function stake() {
-  const token = tokenAs(new ethers.Wallet(purse.key, chain()));
-  return (await token.transfer(state.house, ethers.parseUnits(state.stake.toFixed(6), 6))).hash;
+/**
+ * the stake: the purse pays the house before the first message.
+ *
+ * the transfer is signed here first, and what was signed is written down (its hash, and the signed
+ * transfer itself) before it is sent anywhere. from then on the stake is that one transaction: it
+ * either reaches the chain or it is sent again, the same one, and it is never made twice. sent in
+ * one step, an answer lost between the purse and the chain left a stake that had landed and a page
+ * that never learned its hash, and the next message paid again.
+ */
+async function signStake() {
+  const signer = new ethers.Wallet(purse.key, chain());
+  const call = await tokenAs(signer).transfer.populateTransaction(state.house, ethers.parseUnits(state.stake.toFixed(6), 6));
+  const raw = await signer.signTransaction(await signer.populateTransaction(call));
+  return { hash: ethers.Transaction.from(raw).hash, raw };
+}
+const keptStake = () => { const hash = ls.get('pending'); return hash ? { hash, raw: ls.get('pendingRaw') } : null; };
+const keepStake = (s) => { ls.set('pending', s.hash); if (s.raw) ls.set('pendingRaw', s.raw); else ls.del('pendingRaw'); };
+const dropStake = () => { ls.del('pending'); ls.del('pendingRaw'); };
+/** let go of the kept stake only when the server says it is the one this game was opened with. */
+function spent(r) { const p = ls.get('pending'); if (p && r?.stake && String(r.stake).toLowerCase() === p.toLowerCase()) dropStake(); }
+/**
+ * put a signed stake on the chain, or find that it is there already. safe to do any number of times
+ * for the same stake. false only when it can never land: something else from this purse has taken
+ * its place in line and, looked for three times, the chain has no trace of this one.
+ */
+async function sendStake(s) {
+  if (!s.raw) return true; // kept by an older page, with only its hash: the server says what became of it
+  const p = chain();
+  try { await p.broadcastTransaction(s.raw); return true; } catch { /* already there, or the network. looked at below */ }
+  try {
+    const nonce = ethers.Transaction.from(s.raw).nonce;
+    for (let i = 0; i < 3; i++) {
+      if (await p.getTransactionReceipt(s.hash)) return true;
+      if ((await p.getTransactionCount(purse.address, 'latest')) <= nonce) return true; // its turn has not come: it can still land
+      await sleep(3000);
+    }
+    return false;
+  } catch { return true; } // the chain could not be asked: nothing is concluded from that
 }
 /**
  * a game is looked up by the purse that owns it, and the purse proves it by signing a short dated
@@ -248,18 +282,30 @@ async function proof() {
 const peek = async () => { const p = await proof(); return api(`/session?player=${purse.address}&ts=${p.ts}&sig=${p.sig}`); };
 const openSession = async (stakeHash) => { const p = await proof(); return api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '', stake: stakeHash, ts: p.ts, sig: p.sig }) }); };
 /**
- * a stake that has left the purse must become a game, whatever happens between the two. the hash is
- * kept until the server has opened a session for it, so a dropped connection, a slow block or a closed
- * tab costs a moment and never the stake. only the server saying that hash is no good lets go of it.
+ * a stake that has left the purse must become a game, whatever happens between the two. it is kept
+ * until the server has opened a game with it, so a dropped connection, a slow block, a busy server
+ * or a closed tab costs a moment and never the stake. two things let go of it, and nothing else: the
+ * server saying that this stake opened this game, or that it is no good (it failed on the chain, or
+ * was never a stake). "slow down", "the game is down" and every other refusal leave it where it is.
  */
-async function openFor(hash) {
+async function openFor(s) {
   for (let i = 0; ; i++) {
-    try { const r = await openSession(hash); ls.del('pending'); return r; }
+    try { const r = await openSession(s.hash); spent(r); return r; }
     catch (e) {
-      const waiting = /not find the stake|failed to fetch|networkerror|load failed|something broke/i.test(e.message);
-      if (!waiting) { ls.del('pending'); throw e; }
-      if (i >= 5) throw new Error('your stake is safe. it has not shown up yet: send again in a moment.');
-      status('waiting for your stake to land…', 'busy'); await sleep(3000);
+      if (e.status === 400 || (e.status === 402 && !/not find the stake/i.test(e.message))) { dropStake(); throw e; }
+      if (e.status === 409) {
+        // already used. by the game this purse has open, if the answer to an earlier try was lost; or by one long over.
+        dropStake();
+        const r = await peek().catch(() => null);
+        if (r?.session) return r;
+        throw e;
+      }
+      if (e.status === 401) proofCache = null; // the purse's signed proof went stale while it waited: sign a new one
+      const landed = e.status === 429 || e.status >= 500; // the game's trouble, not the stake's
+      if (i >= 5) throw new Error(landed ? 'your stake is safe. the game could not take it just now: send again in a moment.' : 'your stake is safe. it has not shown up yet: send again in a moment.');
+      status(landed ? 'your stake is in. waiting for the game to take it…' : 'waiting for your stake to land…', 'busy');
+      await sleep(e.status === 429 ? 6000 : 3000);
+      if (!landed) await sendStake(s); // not seen yet: it may never have been sent. the same one, again.
     }
   }
 }
@@ -277,16 +323,27 @@ function adopt(r) {
 async function ensureSession() {
   if (session) return;
   let r = await peek();
-  if (r.session) ls.del('pending'); // one game per purse: an open game is where the last stake went
-  else if (r.carry && !ls.get('pending')) {
+  if (r.session) {
+    // a game is open already. a stake this page is holding is let go of only if it is the one that
+    // opened it. any other (two tabs staked at once) is still this purse's money, and pays for the next game.
+    spent(r);
+    if (ls.get('pending')) note('you have a game open already. the stake you sent is kept: it pays for your next one.');
+  } else if (r.carry && !ls.get('pending')) {
     // the rest of a game that was interrupted: opened without a stake.
     r = await openSession(undefined);
     carry = null; paintAgain();
     if (r.carried) note(`this is the rest of the game it interrupted: ${r.turnsLeft} messages, no charge.`);
   } else {
-    let hash = ls.get('pending');
-    if (hash) status('picking your stake back up…', 'busy');
-    else {
+    let s = keptStake(), opened = null;
+    if (s) {
+      status('picking your stake back up…', 'busy');
+      if (!(await sendStake(s))) { dropStake(); s = null; } // it never left the purse, and now never can: this game needs a new one
+    }
+    if (s) {
+      try { opened = await openFor(s); }
+      catch (e) { if (e.status === 409 && !ls.get('pending')) s = null; else throw e; } // spent on a game that is over
+    }
+    if (!s) {
       if (state.closed) throw new Error('closed for now. nothing was charged.');
       if (state.awake === false) throw new Error(asleepLine());
       if (balance < needed()) await fillIfEmpty();
@@ -295,12 +352,14 @@ async function ensureSession() {
         throw new Error(state.real ? `add money to play: a game is ${money(state.stake)}.` : dry || 'your purse is empty.');
       }
       status(`putting ${money(state.stake)} in the pot…`, 'busy');
-      try { hash = await stake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
-      ls.set('pending', hash);
+      try { s = await signStake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
+      keepStake(s); // written down before it is sent anywhere
+      await sendStake(s);
       status('confirming…', 'busy');
+      opened = await openFor(s);
     }
-    r = await openFor(hash);
-    tween($('#jackpot'), state.jackpot, r.jackpot, 700); pop($('#jackpot')); state.jackpot = r.jackpot;
+    r = opened;
+    if (r.jackpot != null) { tween($('#jackpot'), state.jackpot, r.jackpot, 700); pop($('#jackpot')); state.jackpot = r.jackpot; }
     readBalance().then(() => paintBalance(false));
   }
   adopt(r);
@@ -309,7 +368,7 @@ async function ensureSession() {
 async function resumeIfOpen() {
   try {
     const r = await peek();
-    if (r.session) { ls.del('pending'); adopt(r); }
+    if (r.session) { spent(r); adopt(r); if (ls.get('pending')) note('a stake you sent is kept: it pays for your next game.'); }
     else if (ls.get('pending')) status('a game you paid for is waiting. say something.', 'ok');
     else if (r.carry) { carry = r.carry; paintAgain(); status(`you have ${r.carry.turnsLeft} messages left from a game it interrupted. no charge.`, 'ok'); }
   } catch {}
@@ -658,7 +717,7 @@ $('#restorego').onclick = () => {
     restoreArmed = setTimeout(disarmRestore, 6000);
     return;
   }
-  ls.set('key', w.privateKey); ls.set('address', w.address); ls.del('nick'); ls.del('pending');
+  ls.set('key', w.privateKey); ls.set('address', w.address); ls.del('nick'); dropStake();
   location.reload();
 };
 
