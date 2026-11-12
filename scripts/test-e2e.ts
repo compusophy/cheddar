@@ -568,6 +568,36 @@ async function main() {
   const endS = await books();
   check('the winner is paid, and the house still owes nothing and holds more than its pot', near(await settler.balance(), beforeS + wonS.win.prize) && endS.owed === 0 && endS.margin > 0, JSON.stringify({ got: (await settler.balance()) - beforeS, owed: endS.owed, margin: endS.margin }));
 
+  console.log('real stakes, with a pot the house fills back up');
+  // a pot seed is the house's own money, put up again after every win out of the same wallet. so with
+  // a seed set the house has to hold the next one before it sells a game, and a win leaves it solvent.
+  const seedKey = generatePrivateKey();
+  const seedHouse = privateKeyToAccount(seedKey).address;
+  await stopOne('game');
+  start('game', 'src/server.ts', { ...gameEnv, AGENT_PRIVATE_KEY: seedKey, JACKPOT_SEED: '1', LESSON_LEVY: '0.2' });
+  await until('the game to come back', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
+  if (!(await fetch(BASE + '/api/admin/reset', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })).ok) throw new Error('could not reset the scratch database');
+  state = await fresh();
+  check('with a pot to put up and an empty wallet, it sells nothing', state.awake === false && state.jackpot === 1 && state.house.toLowerCase() === seedHouse.toLowerCase(), JSON.stringify({ awake: state.awake, asleep: state.asleep, pot: state.jackpot }));
+  await settler.send(seedHouse, 2); // this pot, and the next one
+  state = await until('the house to see its money', async () => { const st = await fresh(); return st.awake ? st : null; }, 60_000);
+  check('holding this pot and the next one, it sells', state.awake === true && near(await bal(seedHouse), 2), JSON.stringify({ awake: state.awake, bal: await bal(seedHouse) }));
+  const third = await purse('third');
+  await fund(third.address);
+  await until('the third player to have money', async () => (await third.balance()) >= 1);
+  const seatT = await third.open(await third.stake());
+  const potT = (await fresh()).jackpot;
+  const beforeT = await third.balance();
+  const wonT = seatT.session ? await say(seatT.session, trick()) : { status: 0 } as any;
+  check('a win keeps back what the lesson and the next pot leave lacking: a fifth of this pot at most', wonT.status === 200 && near(potT, 1 + state.stake * state.share) && near(wonT.win?.levy, potT * 0.2) && near(wonT.win?.prize, potT * 0.8), JSON.stringify({ pot: potT, win: wonT.win, error: seatT.error || wonT.error }));
+  const afterT = await until('the lesson', async () => { const st = await fresh(); return !st.learning && st.gen > 0 ? st : null; }, 180_000);
+  await until('the prize to arrive', async () => (await third.balance()) > beforeT + potT * 0.8 - 0.01);
+  await until('the win to be marked paid', async () => { const w = await api('/win/' + wonT.win.id); return w.still_owed === 0 ? w : null; }, 30_000);
+  const endT = await books();
+  check('the winner is paid, the pot is put up again, and the house holds all of it', near(await third.balance(), beforeT + potT * 0.8) && afterT.jackpot === 1 && endT.owed === 0 && endT.margin > 0, JSON.stringify({ got: (await third.balance()) - beforeT, pot: afterT.jackpot, owed: endT.owed, margin: endT.margin }));
+  const restT = await fresh();
+  check('and it sells no more until it holds the next pot too, and says so', restT.awake === false && /next pot/.test(restT.asleep || ''), JSON.stringify({ awake: restT.awake, asleep: restT.asleep }));
+
   await sql.end();
   console.log(`\n${passed} passed, ${failures.length} failed`);
 }

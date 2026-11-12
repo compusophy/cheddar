@@ -269,7 +269,11 @@ export async function canLearn(whose: 'house' | 'machine' = 'house', fresh = fal
     console.error('[think] could not check the day\'s budgets', (e as Error).message);
     return no('cannot check its thinking money right now');
   }
-  if (a.available !== null && a.available + incoming + 1e-9 < need + besides) return no(incoming > 0 ? 'too little thinking money left to play a game' : 'too little thinking money left to learn from a loss');
+  if (a.available !== null && a.available + incoming + 1e-9 < need + besides) {
+    // said as what it is: short of the thinking itself, or only of the money a loss would call on (the pot's next seed).
+    const butFor = besides > 0 && a.available + incoming + 1e-9 >= need;
+    return no(butFor ? 'it cannot put up the next pot yet' : incoming > 0 ? 'too little thinking money left to play a game' : 'too little thinking money left to learn from a loss');
+  }
   return a;
 }
 /** what is free has just changed by more than a rounding (a stake landed, a pot became a prize): the next look reads the wallet again. */

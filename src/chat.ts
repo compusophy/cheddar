@@ -346,11 +346,12 @@ export const playable = (fresh = false): Promise<Awake> => LEVY > 0
   ? canSell(fresh, STAKE * (1 - JACKPOT_SHARE), JACKPOT_SEED)
   : canLearn('house', fresh, SHARED ? JACKPOT_SEED : 0);
 /**
- * may the machine play? its games bring no stake and its wins no levy, so on real stakes the house
- * must already hold what a game and the short lesson after it could cost. otherwise a machine win
- * on a poor house would leave a lost game that nothing is coming to pay for.
+ * may the machine play? its games bring no stake and its wins no levy, so on real stakes it plays
+ * only out of what the house has to spare: a game and a whole lesson, already free. a house living
+ * on its players' stakes spends its first money on their games and their lessons, and a machine
+ * win never leaves a lost game that nothing is coming to pay for.
  */
-export const machineMayPlay = async (): Promise<boolean> => (await playable()).ok && (LEVY > 0 ? (await canLearn('machine', false, 0, LESSON_MIN + GAME_NEED)).ok : true);
+export const machineMayPlay = async (): Promise<boolean> => (await playable()).ok && (LEVY > 0 ? (await canLearn('machine', false, 0, LESSON_NEED + GAME_NEED)).ok : true);
 /** can this win's lesson be begun? the price of a lesson free, or on real stakes the price of a short one. */
 const lessonCan = (win: db.Breach) => canLearn(lessonBudget(win), false, 0, LEVY > 0 ? LESSON_MIN : LESSON_NEED);
 /** whose money a win's lesson is paid from: the machine's own wins are learned from on the machine's account. */
