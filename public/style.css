@@ -160,7 +160,9 @@ td.dim { color: var(--dim); } td.money { color: var(--green); text-align: right;
 .card .row button { flex: 1; padding: var(--u); border: none; border-right: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 600; cursor: pointer; }
 .card .row button:last-child { border-right: none; }
 .card .row button.ghost { background: var(--bg); color: var(--fg); font-weight: 500; }
-.card #cashstatus { margin-top: var(--u); }
+/* what the purse has to say (money arrived, about to send, sent, could not): beside the buttons it is about, in plain sight */
+.card #cashstatus { margin: var(--h) 0 0; color: var(--fg, #eee); font-size: 0.9em; line-height: 1.4; min-height: 1.4em; }
+.card #cashstatus:empty { display: none; }
 
 /* the purse sheet: where money comes in, goes out, and moves between browsers */
 .card { max-height: 92vh; overflow-y: auto; }

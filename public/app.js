@@ -580,10 +580,10 @@ async function lookForMoney() {
   } else paintBalance(false);
 }
 function openPurse() {
-  sheet('#cashout', true); readBalance().then(() => paintBalance(false)); $('#cashstatus').textContent = ''; $('#cashnick').value = ls.get('nick') || ''; disarmRestore();
+  sheet('#cashout', true); readBalance().then(() => paintBalance(false)); $('#cashstatus').textContent = ''; $('#cashnick').value = ls.get('nick') || ''; disarmRestore(); disarmSend();
   clearInterval(purseWatch); purseWatch = setInterval(lookForMoney, 5000);
 }
-function closePurse() { sheet('#cashout', false); clearInterval(purseWatch); purseWatch = null; if (!$('#status').textContent) status(''); }
+function closePurse() { sheet('#cashout', false); clearInterval(purseWatch); purseWatch = null; disarmSend(); if (!$('#status').textContent) status(''); }
 $('#purse').onclick = openPurse;
 $('#cashclose').onclick = closePurse;
 // and on coming back to the page from somewhere else (a wallet, most likely), one look.
@@ -591,10 +591,33 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && st
 $('#cashnick').addEventListener('change', (e) => saveName(e.target.value));
 $('#cashkey').onclick = async () => { try { await navigator.clipboard.writeText(purse.key); $('#cashstatus').textContent = 'copied. keep it safe.'; } catch { prompt('your secret key', purse.key); } };
 $('#addrcopy').onclick = async () => { try { await navigator.clipboard.writeText(purse.address); $('#addrcopy').textContent = 'copied'; setTimeout(() => { $('#addrcopy').textContent = 'copy'; }, 1500); } catch { prompt('your purse address', purse.address); } };
+/**
+ * everything in the purse, sent somewhere else. it cannot be taken back, so it takes two presses:
+ * the first says how much and where to, the second sends it. changing the address starts over. a
+ * few destinations are refused outright, because money sent to them is simply gone.
+ */
+let sendArmed = null;
+function disarmSend() { clearTimeout(sendArmed?.timer); sendArmed = null; const b = $('#cashsend'); b.classList.remove('armed'); b.textContent = 'send all'; }
+$('#cashto').addEventListener('input', disarmSend);
 $('#cashsend').onclick = async () => {
   const to = $('#cashto').value.trim();
-  if (!ethers.isAddress(to)) { $('#cashstatus').textContent = 'that does not look like an address.'; return; }
-  if (balance <= 0) { $('#cashstatus').textContent = 'nothing to send yet.'; return; }
+  const say = (t) => { $('#cashstatus').textContent = t; };
+  if (!ethers.isAddress(to)) { disarmSend(); return say('that does not look like an address.'); }
+  const dest = ethers.getAddress(to), lower = dest.toLowerCase();
+  if (lower === purse.address.toLowerCase()) { disarmSend(); return say('that is this purse.'); }
+  if (/^0x0{40}$/.test(lower) || lower === String(state.token).toLowerCase()) { disarmSend(); return say('money sent to that address is gone for good. not sending.'); }
+  if (lower === String(state.house).toLowerCase()) { disarmSend(); return say('that is the house. money sent there is not a stake, and does not come back. not sending.'); }
+  if (balance <= 0) { disarmSend(); return say('nothing to send yet.'); }
+  if (!sendArmed || sendArmed.to !== lower) {
+    disarmSend();
+    await readBalance(); paintBalance(false);
+    if (balance <= 0) return say('nothing to send yet.');
+    $('#cashsend').classList.add('armed'); $('#cashsend').textContent = 'send it?';
+    say(`${money(balance)}, all of it, to ${dest.slice(0, 8)}…${dest.slice(-6)}. this cannot be undone. press again to send.`);
+    sendArmed = { to: lower, timer: setTimeout(disarmSend, 8000) };
+    return;
+  }
+  disarmSend();
   $('#cashstatus').textContent = 'sending…'; $('#cashsend').disabled = true;
   try {
     const token = tokenAs(new ethers.Wallet(purse.key, chain()));
