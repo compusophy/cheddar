@@ -108,6 +108,10 @@ TOKEN_SYMBOL=...    # what players are told to send, e.g. USDC.e
 
 it refuses to start on mainnet without the token, and it refuses a network name it does not know. the token is never defaulted: a wrong address is the one mistake here that cannot be taken back. on tempo mainnet (chain 4217), read from the chain on 2026-11-10: USDC.e is `0x20C000000000000000000000b9537d11c60E8b50`, OUSD is `0x20c0000000000000000000006a37da5c996874be`, both six decimals. check again before you use either.
 
+**the front door is the simple page** (`public/index.html`, `simple.js`): one line, the pot, a box to type in. a player signs in with tempo wallet (a passkey), adds money in the wallet's own checkout, and pays for a game straight from it, through the same 402 door agents use; a win is paid back to that wallet. there is no purse, key or address on it. `?test` on a play-money game puts a throwaway key in the wallet's place, so the whole path can be run without a passkey. the older page, with the in-browser purse, the rules and every past win, is at `/classic.html`.
+
+**moving a game from play money to real money** keeps what it has learned and nothing else: `npm run reset -- --keep-rules` (or `POST /api/admin/reset?keep=rules`) wipes the ledger and starts the new one from the rules of the latest generation. the pot, the games and the wins of the old ledger are gone.
+
 what changes when the money is real:
 
 - **no welcome grant.** a grant is a transfer to any fresh address, and a fresh address is free to make. the grant endpoint answers 404 and the page never asks for it.

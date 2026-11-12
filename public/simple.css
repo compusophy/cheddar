@@ -28,3 +28,5 @@ form { display: flex; gap: 0.5rem; }
 
 details { margin-top: 2rem; color: var(--dim); font-size: 0.9rem; }
 summary { cursor: pointer; }
+
+details a { color: var(--dim); }

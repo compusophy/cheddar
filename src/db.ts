@@ -619,15 +619,27 @@ export async function lastBotTick(): Promise<number> {
 export const markBotTick = () => sql`INSERT INTO locks (name, holder, taken_at) VALUES ('bot-tick', 'bot', now()) ON CONFLICT (name) DO UPDATE SET taken_at = now()`;
 
 /** wipe everything and reseed generation 0. drops the old per-tier tables too, so a redeploy over the previous schema is clean. */
-export async function resetDb() {
+/**
+ * `keepRules`: the ledger is wiped (the pot, the games, the wins, the money owed) and the rules the ai
+ * has learned so far are carried into the new one as its starting rules. this is how a game moves
+ * from play money to real money without forgetting what it was taught: the lessons are worth
+ * keeping, the play-money books are not.
+ */
+export async function resetDb(opts: { keepRules?: boolean } = {}) {
   // on real money a reset erases the pot and every win still owed. it does not happen by accident,
   // or to someone who merely got hold of the admin token: it takes a setting on the server as well.
   // what counts is the money in the ledger, not only what this process is set to: a play-money
   // process pointed at the real-money database by mistake must not be able to wipe it either.
   const home = await sql<{ value: string }[]>`SELECT value FROM ledger_mark WHERE key = 'network'`.then((r) => r[0]?.value ?? null, () => null);
   if (resetIsGuarded(net.real, home) && !flag('ALLOW_RESET')) throw new Error(`this is a real-money database${net.real ? '' : ' (it was built on mainnet, though this process is set to testnet)'}: a reset would erase the pot and every win still owed. set ALLOW_RESET=1 on the server if you mean it.`);
+  const learned = opts.keepRules
+    ? await sql<{ gen: number; policy: string }[]>`SELECT gen, policy FROM generations ORDER BY gen DESC LIMIT 1`.then((r) => r[0] ?? null, () => null)
+    : null;
   for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'ledger_mark', 'agent_payments', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
   ready = null;
   await init();
+  if (learned && learned.gen > 0) {
+    await sql`UPDATE generations SET policy = ${learned.policy}, lesson = ${`it starts from what ${learned.gen} earlier ${learned.gen === 1 ? 'loss' : 'losses'} taught it.`} WHERE gen = 0`;
+  }
   touch();
 }

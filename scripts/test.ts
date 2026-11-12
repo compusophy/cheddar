@@ -264,7 +264,7 @@ async function main() {
 
   console.log('the page runs no code from anyone else');
   // the purse's key is made and used in the page. a script from another server is a script that could take it.
-  const page = fs.readFileSync(path.join(process.cwd(), 'public', 'index.html'), 'utf8');
+  const page = fs.readFileSync(path.join(process.cwd(), 'public', 'classic.html'), 'utf8');
   const scripts = [...page.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]);
   check('every script the page loads is served from here', scripts.length > 0 && scripts.every((s) => !/^([a-z]+:)?\/\//i.test(s)), scripts.join(' '));
   check('no script is written into the page itself', !/<script(?![^>]*\ssrc=)[^>]*>/i.test(page));
@@ -282,8 +282,9 @@ async function main() {
   const pageJs = fs.readFileSync(path.join(process.cwd(), 'public', 'app.js'), 'utf8');
   check('and loads its code from here, when asked', /s\.src = '\/vendor\/tempo-wallet\.js'/.test(pageJs) && !/<script[^>]*tempo-wallet/.test(page));
   // the simple page: the same rules. its own scripts only, nothing written into the page, the wallet loaded on demand.
-  const simple = fs.readFileSync(path.join(process.cwd(), 'public', 'simple.html'), 'utf8');
+  const simple = fs.readFileSync(path.join(process.cwd(), 'public', 'index.html'), 'utf8');
   const simpleScripts = [...simple.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]);
+  check('the front door is the simple page', /href="\/simple\.css"/.test(simple) && /href="\/classic\.html"/.test(simple));
   check('the simple page loads its scripts from here too, and writes none into itself', simpleScripts.length === 1 && simpleScripts[0] === '/simple.js' && !/<script(?![^>]*\ssrc=)[^>]*>/i.test(simple) && !/\sstyle="/.test(simple), simpleScripts.join(' '));
   check('the library that holds the purse key is the published build of ethers 6.13.4, byte for byte', libHash === '6Zl0Pc8zjSz8KvmNeXRvUQgY4ryFb+BwDvKCmLYcBME0joAaru491tQgi9B7zsMM', libHash);
 
@@ -425,6 +426,20 @@ async function main() {
   check('the books count carried games apart from bought ones', b.games_carried_over >= 2, JSON.stringify({ games: b.games, carried: b.games_carried_over }));
   await db.sql`DELETE FROM stakes WHERE session_id LIKE 'carry-%'`;
   await db.sql`DELETE FROM sessions WHERE id LIKE 'carry-%'`;
+
+  console.log('a new ledger can start from what the ai has learned');
+  // last, because it wipes the ledger: this is how a game moves from play money to real money.
+  const top = (await db.currentGeneration()).gen;
+  const learnedRules = 'never say the forbidden word. rule learned the hard way #' + Date.now();
+  await db.createGeneration(top + 1, learnedRules, 0, 1, true, true, 'a lesson');
+  await db.sql`UPDATE jackpot SET amount = 42 WHERE id = 1`;
+  await db.resetDb({ keepRules: true });
+  const fresh0 = await db.currentGeneration();
+  check('the new ledger begins at generation 0, with the rules it had learned', fresh0.gen === 0 && fresh0.policy === learnedRules, JSON.stringify({ gen: fresh0.gen, policy: String(fresh0.policy).slice(0, 60) }));
+  check('and says where they came from', new RegExp(`${top + 1} earlier loss`).test(String((fresh0 as any).lesson || '')), String((fresh0 as any).lesson));
+  check('the old pot and the old wins are gone', Math.abs((await db.jackpot()) - JACKPOT_SEED) < 1e-9 && (await db.allBreaches()).length === 0);
+  await db.resetDb();
+  check('a plain reset still starts from the first rules', (await db.currentGeneration()).policy !== learnedRules);
 
   console.log(`\n${passed} passed, ${failures.length} failed`);
   await db.sql.end();

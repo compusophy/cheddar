@@ -3,110 +3,48 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0a0a0a">
+<meta name="theme-color" content="#0b0b0c">
 <title>say cheese</title>
-<meta name="description" content="make an ai say the word. it has been told not to. win the pot. every time it loses, it rewrites its own rules, and it pays for every reply itself.">
-<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<meta name="description" content="make the ai say the word. win the pot.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- what a shared link shows. the addresses must be absolute: change them if the site moves. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="say cheese">
 <meta property="og:title" content="make it say cheese.">
-<meta property="og:description" content="make an ai say the word. it has been told not to. win the pot. every time it loses, it rewrites its own rules, and it pays for every reply itself.">
+<meta property="og:description" content="make the ai say the word. win the pot.">
 <meta property="og:url" content="https://cheddar-one.vercel.app/">
 <meta property="og:image" content="https://cheddar-one.vercel.app/card.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="say cheese: make it say cheese. an ai with a wallet that pays for every reply itself.">
+<meta property="og:image:alt" content="say cheese: make it say cheese.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="make it say cheese.">
-<meta name="twitter:description" content="make an ai say the word. it has been told not to. win the pot. every time it loses, it rewrites its own rules, and it pays for every reply itself.">
+<meta name="twitter:description" content="make the ai say the word. win the pot.">
 <meta name="twitter:image" content="https://cheddar-one.vercel.app/card.png">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="/simple.css">
 </head>
 <body>
-<div class="app">
-  <header>
-    <button class="cell tab active" data-view="play">say <em>cheese</em></button>
-    <button class="cell tab" data-view="history">history</button>
-    <button class="cell purse" id="purse" title="your winnings"><span id="bal">$0.00</span></button>
-  </header>
-
-  <section id="play" class="view">
-    <div class="strip">
-      <span class="cell pot" id="jackpot">$1.00</span>
-      <button class="cell gen" id="gen">gen 0</button>
-      <button class="cell gen right hidden" id="abandon">start over</button>
-    </div>
-    <div class="thread" id="thread">
-      <div class="intro" id="intro">
-        <div class="h1">make it say <em>cheese</em>.</div>
-        <div class="h2">it's been told not to. win the pot. it learns.</div>
-        <div class="h2" id="price"></div>
-        <div class="h2" id="thinks"></div>
-      </div>
-    </div>
-    <div class="status" id="status"></div>
-    <form id="form" class="composer">
-      <textarea id="msg" rows="1" placeholder="say something" autofocus enterkeyhint="send"></textarea>
-      <button type="submit" class="cell" id="send">send</button>
-    </form>
-    <button id="again" class="again hidden">play again</button>
-  </section>
-
-  <section id="history" class="view hidden">
-    <div class="strip" id="histstrip"></div>
-    <div class="scroll">
-      <div class="sub">every rule it has was learned from someone beating it. newest first.</div>
-      <div id="gens"></div>
-      <div class="sub">winners</div>
-      <table id="board"><tbody></tbody></table>
-    </div>
-  </section>
-</div>
-
-<div class="sheet hidden" id="rulesheet">
-  <div class="card">
-    <div class="line"><b id="rulesgen">gen 0</b><span class="meta" id="rulesmeta"></span></div>
-    <pre id="policy" class="policy"></pre>
-    <div class="row"><button class="ghost" id="rulesclose">done</button></div>
-  </div>
-</div>
-
-<div class="sheet hidden" id="cashout">
-  <div class="card">
-    <div class="h1">your purse</div>
-    <div class="money" id="cashbal">$0.00</div>
-    <p class="h2 owed hidden" id="owed"></p>
-    <p class="h2" id="cashabout"></p>
-    <div id="addmoney" class="hidden">
-      <div class="sub2">add money</div>
-      <div class="fill">
-        <span class="unit">$</span><input id="fillamount" inputmode="decimal" value="5" maxlength="7" autocomplete="off" aria-label="dollars to add">
-        <button id="fillgo">fill from tempo wallet</button>
-      </div>
-      <p class="h2" id="fillhow"></p>
-      <div class="sub2">or send it yourself</div>
-      <div class="addr"><code id="addr"></code><button id="addrcopy">copy</button></div>
-      <p class="h2" id="addhow"></p>
-    </div>
-    <input id="cashnick" placeholder="your name for the board" maxlength="24" autocomplete="off">
-    <input id="cashto" placeholder="send to…" spellcheck="false" autocomplete="off">
-    <div class="said" id="cashstatus" role="status" aria-live="polite"></div>
-    <div class="row">
-      <button id="cashsend">send all</button>
-      <button class="ghost" id="cashkey">copy key</button>
-      <button class="ghost" id="cashclose">done</button>
-    </div>
-    <details class="other">
-      <summary>use a purse from another browser</summary>
-      <input id="restorekey" type="password" placeholder="paste its secret key" spellcheck="false" autocomplete="off">
-      <div class="row"><button class="ghost" id="restorego">switch to it</button></div>
-    </details>
-  </div>
-</div>
-
-<!-- the purse's key is made and used by this library, so it is served from here, not from anyone else's server: ethers 6.13.4, the published build, unchanged. -->
-<script src="vendor/ethers-6.13.4.umd.min.js"></script>
-<script src="app.js"></script>
+<header>
+  <b>say cheese</b>
+  <button id="me" type="button">sign in</button>
+</header>
+<main>
+  <h1 id="pitch">make the ai say “cheese”.</h1>
+  <p id="pot" class="pot"></p>
+  <div id="thread" aria-live="polite"></div>
+  <p id="said" class="said" role="status" aria-live="polite"></p>
+  <form id="form" autocomplete="off">
+    <input id="msg" placeholder="say something" maxlength="1000" aria-label="your message">
+    <button id="send">send</button>
+  </form>
+  <p id="price" class="dim"></p>
+  <details>
+    <summary>how it works</summary>
+    <p id="how"></p>
+    <p><a href="/classic.html">its rules and every past win</a></p>
+    <p><button id="out" type="button" class="link hidden">sign out</button></p>
+  </details>
+</main>
+<script src="/simple.js"></script>
 </body>
 </html>

@@ -29,7 +29,10 @@ app.use(express.json({ limit: '64kb', verify: (req, _res, buf) => { (req as any)
 app.use((_req, _res, next) => clock.enter(() => next()));
 // a database that will not start (unreachable, or built on the other network's money) stops the whole
 // game. the reason goes to the log, where the operator is; a visitor is told only that it is down.
-app.use(async (_req, res, next) => {
+app.use(async (req, res, next) => {
+  // the one door left open when the ledger will not start: the operator's reset, which is how a
+  // ledger built on the other network's money is replaced. it checks the token and the guard itself.
+  if (req.method === 'POST' && req.path === '/api/admin/reset') return next();
   try { await db.init(); next(); }
   catch (e) { console.error('[db] not started:', (e as Error).message); res.status(503).json({ error: 'the game is down: its ledger would not start. try again in a moment.', down: true }); }
 });
@@ -328,7 +331,8 @@ function admin(req: express.Request, res: express.Response): boolean {
 }
 app.post('/api/admin/reset', async (req, res) => {
   if (!admin(req, res)) return;
-  try { await db.resetDb(); res.json({ ok: true }); } catch (e) { res.status(403).json({ error: (e as Error).message }); }
+  // ?keep=rules: a new ledger that starts from the rules the ai has already learned.
+  try { await db.resetDb({ keepRules: req.query.keep === 'rules' }); res.json({ ok: true, kept_rules: req.query.keep === 'rules' }); } catch (e) { res.status(403).json({ error: (e as Error).message }); }
 });
 app.post('/api/admin/reset-window', async (req, res) => { if (!admin(req, res)) return; await db.clearDisbursementWindow(); res.json({ ok: true }); });
 app.post('/api/admin/fund', async (req, res) => { if (!admin(req, res)) return; res.json(await treasury.faucet(treasury.agentAddress)); });
