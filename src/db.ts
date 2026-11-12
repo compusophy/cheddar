@@ -63,6 +63,11 @@ export function init(): Promise<void> {
     // a stake can arrive as a machine payment (an agent paying over http 402) instead of a purse transfer.
     await sql`ALTER TABLE stakes ADD COLUMN IF NOT EXISTS via TEXT`;
     await sql`INSERT INTO generations (gen, policy) VALUES (0, ${GEN0}) ON CONFLICT DO NOTHING`;
+    // a payment opens one game. the code that records a stake enforces it; this index is the second
+    // lock on the same door. it is not allowed to stop the game starting: a table that already holds
+    // a duplicate from before the rule existed just goes without it.
+    try { await sql`CREATE UNIQUE INDEX IF NOT EXISTS stakes_one_game_per_payment ON stakes (lower(tx_hash))`; }
+    catch (e) { console.warn('[db] stakes already holds a payment used twice; the unique index was not created:', (e as Error).message); }
   })().catch((e) => { ready = null; throw e; }); // a failed init must not poison the instance
   return ready;
 }
@@ -157,12 +162,36 @@ export const recentThoughts = (limit = 12) => sql<{ purpose: string; model: stri
 
 /** the pot, to the millionth of a dollar: sums of binary floats are not shown to people. */
 export const jackpot = async () => Math.round(Number((await sql<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1`)[0]?.amount ?? 0) * 1e6) / 1e6;
-/** a stake landed: record it and grow the pot. one transaction, so a stake is never counted twice or lost. */
-export const recordStake = (sessionId: string, player: string, amount: number, txHash: string, toPot: number, via: string | null = null) =>
+/**
+ * a payment opens one game, once.
+ *
+ * the check "has this payment been used?" and the write that uses it have to be one step. apart,
+ * the same payment sent several times at the same moment passed the check every time: eight
+ * requests, eight games, and a pot grown by eight stakes the house never received. so the table is
+ * locked for the length of the step, and the hash is compared without regard to letter case, because
+ * the same transaction can be written 0xAB… or 0xab… and is still the same transaction.
+ * returns false when the payment has been used before.
+ */
+async function useStake(tx: any, sessionId: string, player: string, amount: number, txHash: string, toPot: number, via: string | null): Promise<boolean> {
+  await tx`LOCK TABLE stakes IN SHARE ROW EXCLUSIVE MODE`;
+  if ((await tx`SELECT 1 FROM stakes WHERE lower(tx_hash) = ${txHash.toLowerCase()} LIMIT 1`).length) return false;
+  await tx`INSERT INTO stakes (session_id, player, amount, tx_hash, via) VALUES (${sessionId}, ${player.toLowerCase()}, ${amount}, ${txHash.toLowerCase()}, ${via})`;
+  await tx`UPDATE jackpot SET amount = amount + ${toPot} WHERE id = 1`;
+  return true;
+}
+/** record a stake and grow the pot. false when that payment was already used. */
+export const recordStake = (sessionId: string, player: string, amount: number, txHash: string, toPot: number, via: string | null = null): Promise<boolean> =>
+  sql.begin((tx) => useStake(tx, sessionId, player, amount, txHash, toPot, via)) as any;
+/**
+ * a stake becomes a game: the payment is used, the pot grows and the game is opened, together or not
+ * at all. a function that died between them used to leave a stake spent with no game to show for it.
+ */
+export const openStaked = (o: { sessionId: string; gen: number; player: string; nickname: string | null; amount: number; txHash: string; toPot: number; via: string | null }): Promise<boolean> =>
   sql.begin(async (tx) => {
-    await tx`INSERT INTO stakes (session_id, player, amount, tx_hash, via) VALUES (${sessionId}, ${player.toLowerCase()}, ${amount}, ${txHash}, ${via})`;
-    await tx`UPDATE jackpot SET amount = amount + ${toPot} WHERE id = 1`;
-  });
+    if (!(await useStake(tx, o.sessionId, o.player, o.amount, o.txHash, o.toPot, o.via))) return false;
+    await tx`INSERT INTO sessions (id, gen, player, nickname, transcript) VALUES (${o.sessionId}, ${o.gen}, ${o.player.toLowerCase()}, ${o.nickname}, '[]')`;
+    return true;
+  }) as any;
 /** take the whole pot for a win and reseed it. returns what was taken. atomic, so two wins cannot both take it. */
 export async function claimJackpot(): Promise<number> {
   return sql.begin(async (tx) => {
@@ -212,10 +241,17 @@ export const hasOpenSession = async (player: string) => !!(await openSessionFor(
 export const hasEverStaked = async (player: string) => (await sql`SELECT 1 FROM stakes WHERE player = ${player.toLowerCase()} LIMIT 1`).length > 0;
 export const faucetSeen = async (player: string) => (await sql`SELECT 1 FROM locks WHERE name = ${'faucet-' + player.toLowerCase()}`).length > 0;
 export const markFaucet = (player: string) => sql`INSERT INTO locks (name, holder) VALUES (${'faucet-' + player.toLowerCase()}, 'faucet') ON CONFLICT DO NOTHING`;
+/**
+ * take this purse's one welcome grant. true for exactly one caller, however many ask at the same
+ * moment: asking "was it given?" and then writing "it was given" as two steps let all of them through.
+ */
+export const claimFaucet = async (player: string) =>
+  (await sql`INSERT INTO locks (name, holder) VALUES (${'faucet-' + player.toLowerCase()}, 'faucet') ON CONFLICT DO NOTHING RETURNING name`).length > 0;
+export const unclaimFaucet = (player: string) => sql`DELETE FROM locks WHERE name = ${'faucet-' + player.toLowerCase()} AND holder = 'faucet'`;
 /** wins paid to one purse in the last day; the per-purse cap stops one player taking every pot in a row. */
 export const wonLast24h = async (player: string) =>
   Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM breaches WHERE player = ${player.toLowerCase()} AND paid_at > now() - interval '1 day'`)[0].t);
-export const stakeSeen = async (txHash: string) => (await sql`SELECT 1 FROM stakes WHERE tx_hash = ${txHash}`).length > 0;
+export const stakeSeen = async (txHash: string) => (await sql`SELECT 1 FROM stakes WHERE lower(tx_hash) = ${txHash.toLowerCase()} LIMIT 1`).length > 0;
 export const markPaid = (winId: number, amount: number, txHash: string) => sql`UPDATE breaches SET amount = ${amount}, paid = ${amount}, tx_hash = ${txHash}, paid_at = now() WHERE id = ${winId}`;
 /** one transfer towards a win. the win carries a tx hash only once it is paid in full: that is what "paid" means everywhere else. */
 export const addPayment = (winId: number, amount: number, txHash: string) => sql`

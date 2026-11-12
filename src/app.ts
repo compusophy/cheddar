@@ -151,8 +151,9 @@ app.post('/api/faucet', async (req, res) => {
   if (!(GRANT > 0)) return res.status(404).json({ error: 'no welcome grant here' });
   if (!address || !isAddress(address)) return res.status(400).json({ error: 'bad purse' });
   if (await db.faucetSeen(address) || await db.hasEverStaked(address)) return res.status(429).json({ error: 'already given' });
-  if (await db.rateAllow('grant', GRANTS_PER_DAY, 86400)) return res.status(429).json({ error: 'the house has given out enough today' });
-  await db.markFaucet(address);
+  // the purse's one grant is taken in a single step, so of many requests at once only one goes on to be paid.
+  if (!(await db.claimFaucet(address))) return res.status(429).json({ error: 'already given' });
+  if (await db.rateAllow('grant', GRANTS_PER_DAY, 86400)) { await db.unclaimFaucet(address); return res.status(429).json({ error: 'the house has given out enough today' }); }
   const r = await treasury.pay(address, String(GRANT));
   res.json({ ok: r.ok });
 });

@@ -58,12 +58,17 @@ export async function openSession(player: string, nickname: string | null, stake
     // asleep: the house cannot pay for the ai's thoughts right now, so it does not sell a game it cannot play.
     if (!stakeTx) { const a = await awake(); if (!a.ok) return { status: 503, body: { error: `it is asleep: ${a.why}. nothing was charged.`, asleep: true } }; }
     if (!stakeTx || !/^0x[0-9a-fA-F]{64}$/.test(stakeTx)) return { status: 402, body: { error: 'stake required' } };
-    if (await db.stakeSeen(stakeTx)) return { status: 409, body: { error: 'that stake was already used' } };
-    const v = await treasury.verifyTransfer(stakeTx, player, treasury.agentAddress, STAKE);
+    const hash = stakeTx.toLowerCase(); // one transaction, one spelling
+    if (await db.stakeSeen(hash)) return { status: 409, body: { error: 'that stake was already used' } };
+    const v = await treasury.verifyTransfer(hash, player, treasury.agentAddress, STAKE);
     if (!v.ok) return { status: 402, body: { error: v.error } };
-    await db.recordStake(id, player, STAKE, stakeTx, STAKE * JACKPOT_SHARE);
+    // the payment is used, the pot grows and the game opens in one step. of several requests carrying
+    // the same payment, exactly one gets here with it still unused.
+    const opened = await db.openStaked({ sessionId: id, gen: gen.gen, player, nickname: cleanNick(nickname), amount: STAKE, txHash: hash, toPot: STAKE * JACKPOT_SHARE, via: null });
+    if (!opened) return { status: 409, body: { error: 'that stake was already used' } };
+    return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
   }
-  await db.createSession(id, gen.gen, player.toLowerCase(), free ? String(nickname ?? '') || null : cleanNick(nickname));
+  await db.createSession(id, gen.gen, player.toLowerCase(), String(nickname ?? '') || null);
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 
@@ -80,8 +85,8 @@ export async function openPaidSession(player: string, nickname: string | null, s
   const open = await db.openSessionFor(player);
   if (open) await db.updateSession(open.id, JSON.parse(open.transcript), open.turns, open.gen === gen.gen ? 'abandoned' : 'stale');
   const id = randomBytes(12).toString('hex');
-  await db.recordStake(id, player, STAKE, stakeTx, STAKE * JACKPOT_SHARE, 'mpp');
-  await db.createSession(id, gen.gen, player.toLowerCase(), cleanNick(nickname));
+  const opened = await db.openStaked({ sessionId: id, gen: gen.gen, player, nickname: cleanNick(nickname), amount: STAKE, txHash: stakeTx, toPot: STAKE * JACKPOT_SHARE, via: 'mpp' });
+  if (!opened) return { status: 409, body: { error: 'that payment was already used' } };
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 

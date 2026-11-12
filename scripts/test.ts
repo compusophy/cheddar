@@ -133,6 +133,27 @@ async function main() {
   check('a start that stopped for want of money is not counted', (await db.lessonStarted(lessonWin)) === 2);
   await db.sql`DELETE FROM breaches WHERE id = ${lessonWin}`;
 
+  console.log('a payment opens one game, once');
+  const sp = '0x00000000000000000000000000000000000000c7';
+  const potS = await db.jackpot();
+  const payHash = '0x' + 'ABCDEF0123456789'.repeat(4);
+  const tries = await Promise.all(Array.from({ length: 8 }, (_, i) => db.openStaked({ sessionId: 'one-stake-' + i, gen: 0, player: sp, nickname: null, amount: 0.25, txHash: payHash, toPot: 0.2, via: null })));
+  check('eight requests carrying the same payment: one game', tries.filter(Boolean).length === 1, JSON.stringify(tries));
+  check('and the pot grows by one stake', Math.abs((await db.jackpot()) - (potS + 0.2)) < 1e-9, String((await db.jackpot()) - potS));
+  check('exactly one game exists for it', (await db.sql`SELECT 1 FROM sessions WHERE id LIKE 'one-stake-%'`).length === 1);
+  check('the same payment spelled in lower case is still the same payment', !(await db.openStaked({ sessionId: 'one-stake-lower', gen: 0, player: sp, nickname: null, amount: 0.25, txHash: payHash.toLowerCase(), toPot: 0.2, via: null })) && (await db.stakeSeen(payHash.toLowerCase())) && (await db.stakeSeen(payHash.toUpperCase().replace('0X', '0x'))));
+  check('recording it again by the older route is refused too', !(await db.recordStake('one-stake-again', sp, 0.25, payHash, 0.2)));
+  check('none of that moved the pot again', Math.abs((await db.jackpot()) - (potS + 0.2)) < 1e-9);
+  await db.sql`DELETE FROM stakes WHERE session_id LIKE 'one-stake-%'`;
+  await db.sql`DELETE FROM sessions WHERE id LIKE 'one-stake-%'`;
+  await db.sql`UPDATE jackpot SET amount = ${potS} WHERE id = 1`;
+  const gp = '0x00000000000000000000000000000000000000c8';
+  const claims = await Promise.all(Array.from({ length: 8 }, () => db.claimFaucet(gp)));
+  check('eight requests for one purse\'s welcome grant: one is let through', claims.filter(Boolean).length === 1, JSON.stringify(claims));
+  await db.unclaimFaucet(gp);
+  check('a grant that could not be given can be asked for again', await db.claimFaucet(gp));
+  await db.unclaimFaucet(gp);
+
   console.log('one message at a time in a game');
   const tp = '0x00000000000000000000000000000000000000e1';
   await db.createSession('turn-test', 0, tp, null);
