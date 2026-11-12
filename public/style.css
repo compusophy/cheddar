@@ -186,3 +186,9 @@ a.cell { text-decoration: none; color: inherit; }
 .receipt + .msg { margin-top: var(--u); }
 a.receipt:hover, a.receipt:focus-visible { color: var(--gold); }
 a.receipt::after { content: ' ↗'; }
+
+/* the history summary: one cell the width of the bar, its text free to wrap. */
+.cell.sum { display: block; flex: 1; min-width: 0; cursor: default; color: var(--dim); user-select: text; }
+.cell.sum b { color: var(--fg); }
+.cell.sum a { color: inherit; text-decoration: underline; text-decoration-color: var(--line); text-underline-offset: 3px; }
+.cell.sum a:hover, .cell.sum a:focus-visible { color: var(--gold); }

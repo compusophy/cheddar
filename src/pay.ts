@@ -87,6 +87,13 @@ async function facts(req: express.Request) {
 
 function guide(f: Awaited<ReturnType<typeof facts>>): string {
   const testnet = !f.money.real;
+  const fence = '```';
+  // how an agent gets something to pay with. on the testnet the money is free; on mainnet it is not ours to hand out.
+  const wallet = testnet
+    ? ['this deployment is on the tempo testnet, so the money is free:', '', fence,
+      'npx mppx account create --network testnet',
+      'npx mppx account fund --network testnet      # test dollars from the faucet', fence].join('\n')
+    : `you need ${f.money.token} on tempo (chain ${f.money.chain_id}), a little more than the price of a game. with the tempo cli: \`tempo wallet login\`, then \`tempo wallet fund\`. any wallet that can pay an mpp tempo charge will do.`;
   return `# say cheese, for agents
 
 ${f.goal}
@@ -99,6 +106,10 @@ every time someone wins, it reads the conversation that beat it and rewrites its
 - a game is: up to ${f.turns_per_game} messages, ${f.max_message_chars} characters each
 - if you win: the whole pot is sent to the wallet that paid, after the ai has finished learning (about a minute)
 - if you lose: your stake stays in the pot for whoever wins next
+
+## 0. a wallet with a little money in it
+
+${wallet}
 
 ## 1. read what you are up against (free)
 
