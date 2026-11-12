@@ -81,6 +81,9 @@ function load(): Promise<Loaded> {
         account,
         allowedChainIds: [chain.id],
         currencies: [THINK_TOKEN],
+        // when the house pays its own network fee (the seller did not offer to, or its offer failed),
+        // it pays it in the same token, so that one balance is all the wallet ever needs.
+        feeToken: THINK_TOKEN,
         decimals: 6,
         maxAmount: String(Math.max(THINK_MAX_PRICE, PATCH_MAX_PRICE)),
         ...(isAddr(env('THINK_RECIPIENT')) ? { expectedRecipients: [env('THINK_RECIPIENT') as `0x${string}`] } : {}),
@@ -214,7 +217,13 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
     last = null; // the balance is the likeliest reason; look again next time someone asks
     throw new Broke(`could not pay for a thought: ${why.slice(0, 200)}`);
   }
-  if (res.status === 402) { await db.releaseThought(rsv.id); last = null; throw new Broke('the payment for a thought was refused'); }
+  if (res.status === 402) {
+    // refused outright. in pull mode nothing was sent by this side, so the money is free again and the
+    // caller may try once more paying its own fee; refused there too, the house simply cannot buy this thought.
+    await db.releaseThought(rsv.id); last = null;
+    if (!mode) return { res, paid: false, sellerFailed: true, cost: 0, tx: null };
+    throw new Broke('the payment for a thought was refused');
+  }
   let tx: string | null = null;
   try { tx = Receipt.fromResponse(res)?.reference ?? null; } catch { /* no receipt on this response */ }
   await db.settleThought(rsv.id, tx);
@@ -231,11 +240,12 @@ export async function askPaid(a: Ask): Promise<{ text: string; paid: Paid; cutOf
   const pushing = MODE === 'push' || Date.now() < pushUntil;
   let t = await attempt(a, pushing ? 'push' : undefined);
   if (t.sellerFailed && !pushing && MODE !== 'pull') {
-    console.warn(`[think] the seller could not complete a sponsored payment (${t.res.status}). paying our own fee for the next ten minutes.`);
+    console.warn(`[think] the seller did not complete a payment it was to broadcast (${t.res.status}). paying our own fee for the next ten minutes.`);
     pushUntil = Date.now() + 10 * 60_000;
     t = await attempt(a, 'push');
   }
   const { res } = t;
+  if (res.status === 402) throw new Broke('the payment for a thought was refused');
   if (!res.ok) throw new Error(`[think] the model answered ${res.status}: ${(await res.text().catch(() => '')).slice(0, 300)}`);
   let text: string, finish: string | null;
   if (a.onDelta) ({ text, finish } = await readStream(res, a.onDelta));

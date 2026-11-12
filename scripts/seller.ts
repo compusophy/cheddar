@@ -97,7 +97,9 @@ async function main() {
     await new Promise((r) => setTimeout(r, 4000));
   }
   const mppx = Mppx.create({
-    methods: [tempo.charge({ testnet: true, currency: PATH_USD, decimals: 6, recipient, store: Store.memory(), ...(sponsor ? { feePayer: sponsor } : {}) } as any)],
+    methods: [tempo.charge({ testnet: true, currency: PATH_USD, decimals: 6, recipient, store: Store.memory(), ...(sponsor ? { feePayer: sponsor } : {}),
+      // the token the sponsor pays the fee in, when it should differ from the default (to test a buyer who names another).
+      ...(sponsor && process.env.SELLER_SPONSOR_FEE_TOKEN ? { feeToken: process.env.SELLER_SPONSOR_FEE_TOKEN, allowedFeeTokens: [process.env.SELLER_SPONSOR_FEE_TOKEN] } : {}) } as any)],
     secretKey: randomBytes(32).toString('base64'),
   } as any) as any;
   let sold = 0;
