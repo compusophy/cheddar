@@ -387,14 +387,15 @@ $('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHT
 
 // history: a ledger of defeats. each row is a generation, the line that killed it, and what it learned.
 async function loadHistory() {
-  const [{ generations, wins, board }, th] = await Promise.all([api('/history'), api('/thoughts').catch(() => null)]);
+  const [{ generations, wins, totals, board }, th] = await Promise.all([api('/history'), api('/thoughts').catch(() => null)]);
   const byId = Object.fromEntries(wins.map((w) => [w.id, w]));
-  const paid = wins.reduce((t, w) => t + (w.paid ? Number(w.prize) : 0), 0);
+  // `wins` holds only the conversations shown below; the counts come already added up.
+  const won = Number(totals?.wins ?? wins.length), paid = Number(totals?.paid ?? 0);
   // one line of facts that wraps where it has to: five cells of ten characters do not fit a phone, or even the page.
   const thinking = th && th.thoughts
     ? ` · <a ${th.recent[0]?.tx ? `href="${esc(th.explorer)}/tx/${esc(th.recent[0].tx)}" target="_blank" rel="noopener noreferrer"` : ''} title="what it has paid for its own replies. the link is its latest payment.">${small(th.spent)} on thinking</a>`
     : '';
-  $('#histstrip').innerHTML = `<div class="cell sum"><b>gen ${Number(state?.gen ?? generations.length - 1)}</b> · ${wins.length} win${wins.length === 1 ? '' : 's'} · ${money(paid)} paid${thinking}</div>`;
+  $('#histstrip').innerHTML = `<div class="cell sum"><b>gen ${Number(state?.gen ?? generations.length - 1)}</b> · ${won} win${won === 1 ? '' : 's'} · ${money(paid)} paid${thinking}</div>`;
 
   $('#gens').innerHTML = generations.slice().reverse().map((g, i, arr) => {
     const w = g.parent_breach_id ? byId[g.parent_breach_id] : null;

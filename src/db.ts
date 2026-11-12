@@ -9,6 +9,15 @@ if (!url) throw new Error('[db] DATABASE_URL missing');
 // DB_POOL: connections per instance. 1 for a local single-session database such as pglite.
 export const sql = postgres(url, { max: Math.max(1, Number(process.env.DB_POOL) || 5), idle_timeout: 20, prepare: false, onnotice: () => {} });
 
+/**
+ * a counter that moves whenever something a visitor can see changes here: the pot, the generation,
+ * whether it is learning. the page asks for the game's state every few seconds, for every visitor;
+ * with this the answer can be kept and handed out again until one of those things has changed.
+ */
+let changes = 0;
+export const stamp = () => changes;
+const touch = () => { changes++; };
+
 let ready: Promise<void> | null = null;
 export function init(): Promise<void> {
   if (ready) return ready;
@@ -178,6 +187,7 @@ async function useStake(tx: any, sessionId: string, player: string, amount: numb
   if ((await tx`SELECT 1 FROM stakes WHERE lower(tx_hash) = ${txHash.toLowerCase()} LIMIT 1`).length) return false;
   await tx`INSERT INTO stakes (session_id, player, amount, tx_hash, via) VALUES (${sessionId}, ${player.toLowerCase()}, ${amount}, ${txHash.toLowerCase()}, ${via})`;
   await tx`UPDATE jackpot SET amount = amount + ${toPot} WHERE id = 1`;
+  touch();
   return true;
 }
 /** record a stake and grow the pot. false when that payment was already used. */
@@ -197,6 +207,7 @@ export const openStaked = (o: { sessionId: string; gen: number; player: string; 
 export async function claimJackpot(): Promise<number> {
   return sql.begin(async (tx) => {
     const [r] = await tx<{ amount: number }[]>`UPDATE jackpot SET amount = ${JACKPOT_SEED} WHERE id = 1 RETURNING (SELECT amount FROM jackpot WHERE id = 1) AS amount`;
+    touch();
     // to the millionth of a dollar, which is the smallest amount the token can move.
     return Math.round(Number(r.amount) * 1e6) / 1e6;
   }) as any;
@@ -271,8 +282,8 @@ export const currentGeneration = async () => (await sql<Generation[]>`SELECT * F
 export const getGeneration = async (gen: number) => (await sql<Generation[]>`SELECT * FROM generations WHERE gen = ${gen}`)[0];
 export const allGenerations = () => sql<Generation[]>`SELECT * FROM generations ORDER BY gen ASC`;
 export const createGeneration = (gen: number, policy: string, parentBreachId: number, rounds: number, regressionPassed: boolean, legitPassed: boolean, lesson: string | null) =>
-  sql`INSERT INTO generations (gen, policy, parent_breach_id, hardening_rounds, regression_passed, legit_passed, lesson)
-      VALUES (${gen}, ${policy}, ${parentBreachId}, ${rounds}, ${regressionPassed ? 1 : 0}, ${legitPassed ? 1 : 0}, ${lesson}) ON CONFLICT DO NOTHING`;
+  (touch(), sql`INSERT INTO generations (gen, policy, parent_breach_id, hardening_rounds, regression_passed, legit_passed, lesson)
+      VALUES (${gen}, ${policy}, ${parentBreachId}, ${rounds}, ${regressionPassed ? 1 : 0}, ${legitPassed ? 1 : 0}, ${lesson}) ON CONFLICT DO NOTHING`.then((r) => (touch(), r)));
 
 export const getSession = async (id: string) => (await sql<SessionRow[]>`SELECT * FROM sessions WHERE id = ${id}`)[0];
 export const createSession = (id: string, gen: number, player: string, nickname: string | null) =>
@@ -322,12 +333,23 @@ export async function recordWin(o: { gen: number; sessionId: string; player: str
     await tx`UPDATE sessions SET transcript = ${text}, turns = ${o.turns}, status = ${already ? 'stale' : 'won'}, busy_until = NULL, updated_at = now() WHERE id = ${o.sessionId}`;
     const [r] = await tx<{ id: number }[]>`INSERT INTO breaches (gen, session_id, player, nickname, recipient, amount, tx_hash, transcript, took_pot)
       VALUES (${o.gen}, ${o.sessionId}, ${o.player}, ${o.nickname}, ${o.player}, ${prize}, NULL, ${text}, ${takes ? 1 : 0}) RETURNING id`;
+    touch();
     return { winId: r.id, prize, late: already };
   }) as any;
 }
 export const markAutoimmune = (id: number) => sql`UPDATE breaches SET autoimmune = 1 WHERE id = ${id}`;
 export const allBreaches = () => sql<Breach[]>`SELECT * FROM breaches ORDER BY id ASC`;
 export const breachesForGen = (gen: number) => sql<Breach[]>`SELECT * FROM breaches WHERE gen = ${gen} ORDER BY id ASC`;
+/**
+ * the wins the history page shows: for each generation, the one that produced it. the page used to
+ * be sent every winning conversation ever recorded, to show these few.
+ */
+export const parentWins = () => sql<Breach[]>`SELECT b.* FROM breaches b JOIN generations g ON g.parent_breach_id = b.id ORDER BY b.id ASC`;
+/** how many wins there have been and how much has been paid out for them, without reading a single conversation. */
+export async function winTotals() {
+  const [r] = await sql<{ n: number; paid: number }[]>`SELECT COUNT(*)::int AS n, COALESCE(SUM(CASE WHEN tx_hash IS NOT NULL THEN amount ELSE paid END), 0)::float AS paid FROM breaches`;
+  return { wins: r.n, paid: Math.round(Number(r.paid) * 1e6) / 1e6 };
+}
 export const breachById = async (id: number) => (await sql<Breach[]>`SELECT * FROM breaches WHERE id = ${id}`)[0];
 
 /**
@@ -395,10 +417,12 @@ export async function rateAllow(bucket: string, max: number, seconds: number): P
 
 export async function acquireLock(name: string, holder: string): Promise<boolean> {
   await sql`DELETE FROM locks WHERE name = ${name} AND taken_at < now() - interval '10 minutes'`;
-  return (await sql`INSERT INTO locks (name, holder) VALUES (${name}, ${holder}) ON CONFLICT DO NOTHING RETURNING name`).length > 0;
+  const got = (await sql`INSERT INTO locks (name, holder) VALUES (${name}, ${holder}) ON CONFLICT DO NOTHING RETURNING name`).length > 0;
+  touch();
+  return got;
 }
 /** what the holder is doing right now, for the live narration while the ai learns. */
-export const setLockPhase = (name: string, phase: string) => sql`UPDATE locks SET holder = ${phase} WHERE name = ${name}`;
+export const setLockPhase = (name: string, phase: string) => sql`UPDATE locks SET holder = ${phase} WHERE name = ${name}`.then((r) => (touch(), r));
 export const lockPhase = async (name: string) => (await sql<{ holder: string }[]>`SELECT holder FROM locks WHERE name = ${name} AND taken_at > now() - interval '10 minutes'`)[0]?.holder ?? null;
 /** a purse signs its own name: nobody can rename someone else's wins. */
 export const setNickname = (player: string, nickname: string | null) =>
@@ -406,7 +430,7 @@ export const setNickname = (player: string, nickname: string | null) =>
     await tx`UPDATE sessions SET nickname = ${nickname} WHERE player = ${player.toLowerCase()}`;
     await tx`UPDATE breaches SET nickname = ${nickname} WHERE player = ${player.toLowerCase()}`;
   });
-export const releaseLock = (name: string) => sql`DELETE FROM locks WHERE name = ${name}`;
+export const releaseLock = (name: string) => sql`DELETE FROM locks WHERE name = ${name}`.then((r) => (touch(), r));
 export const lockSince = async (name: string) => (await sql<{ taken_at: string }[]>`SELECT taken_at FROM locks WHERE name = ${name} AND taken_at > now() - interval '10 minutes'`)[0]?.taken_at ?? null;
 
 export async function lastBotTick(): Promise<number> {
@@ -423,4 +447,5 @@ export async function resetDb() {
   for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
   ready = null;
   await init();
+  touch();
 }

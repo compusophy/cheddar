@@ -204,6 +204,23 @@ async function main() {
   await db.sql`DELETE FROM sessions WHERE id LIKE 'win-%'`;
   await db.sql`UPDATE jackpot SET amount = ${potWas} WHERE id = 1`;
 
+  console.log('the history page is sent what it shows, not everything');
+  const hp = '0x00000000000000000000000000000000000000d7';
+  const HG = 8000 + Math.floor(Math.random() * 900);
+  const totalsBefore = await db.winTotals();
+  const ids: number[] = [];
+  for (let i = 0; i < 5; i++) { await db.createSession('hist-' + i, HG, hp, null); ids.push(await db.recordBreach({ gen: HG, session_id: 'hist-' + i, player: hp, nickname: null, recipient: hp, amount: i === 0 ? 3 : 0, tx_hash: i === 0 ? '0x' + '0f'.repeat(32) : null, transcript: JSON.stringify([{ role: 'user', text: 'x'.repeat(500) }]) })); }
+  const stampBefore = db.stamp();
+  await db.createGeneration(HG + 1, 'rules after the first of five wins', ids[0], 1, true, true, null);
+  check('a new generation is a change the kept state has to notice', db.stamp() > stampBefore);
+  const shown = (await db.parentWins()).filter((w) => w.gen === HG);
+  check('five wins against one generation: the page gets the one that produced the next', shown.length === 1 && shown[0].id === ids[0], JSON.stringify(shown.map((w) => w.id)));
+  const totalsAfter = await db.winTotals();
+  check('but the count and the money paid still cover all of them', totalsAfter.wins === totalsBefore.wins + 5 && Math.abs(totalsAfter.paid - (totalsBefore.paid + 3)) < 1e-9, JSON.stringify({ totalsBefore, totalsAfter }));
+  await db.sql`DELETE FROM generations WHERE gen = ${HG + 1}`;
+  await db.sql`DELETE FROM breaches WHERE gen = ${HG}`;
+  await db.sql`DELETE FROM sessions WHERE id LIKE 'hist-%'`;
+
   console.log('prize money that has not left the house is counted as owed');
   const owedBefore = await db.owedTotal();
   await db.createSession('owed-total-test', 0, '0x00000000000000000000000000000000000000a9', null);

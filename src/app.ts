@@ -46,13 +46,19 @@ function limited(who: string, max = 60, kind = 'chat') {
   return arr.length > max;
 }
 
-app.get('/api/state', async (_req, res) => {
-  const gen = await db.currentGeneration();
-  const phase = await db.lockPhase('harden');
-  const up = await think.awake();
-  res.json({
+/**
+ * the game's state is asked for by every open page every few seconds. it is worked out once and
+ * handed out again until something in it changes here, or two seconds pass (another instance may
+ * have changed it). requests that arrive while it is being worked out wait for that one answer.
+ */
+const STATE_MS = 2000;
+let stateKept: { at: number; stamp: number; body: unknown } | null = null;
+let stateMaking: Promise<unknown> | null = null;
+async function makeState() {
+  const [gen, phase, up, pot, machine] = await Promise.all([db.currentGeneration(), db.lockPhase('harden'), think.awake(), db.jackpot(), db.machinePulse()]);
+  return {
     gen: gen.gen, policy: gen.policy, learning: phase ? { phase: /^\d+$/.test(phase) ? 'reading the conversation that beat it' : phase } : null,
-    word: WORD, stake: STAKE, grant: GRANT, jackpot: await db.jackpot(), seed: JACKPOT_SEED, share: JACKPOT_SHARE,
+    word: WORD, stake: STAKE, grant: GRANT, jackpot: pot, seed: JACKPOT_SEED, share: JACKPOT_SHARE,
     house: treasury.agentAddress, token: net.token, symbol: net.symbol, rpc: net.rpc, chain: net.chainId,
     // real: the dollars are worth dollars. the page uses it to stop offering a welcome grant and to
     // show how to add money instead. closed: the operator has stopped new games (open ones play out).
@@ -60,18 +66,38 @@ app.get('/api/state', async (_req, res) => {
     // awake: the house can pay for the ai's next thought. when it cannot, the page takes no stake.
     awake: up.ok, asleep: up.ok ? null : up.why, model: MODEL, thinks: think.describe(),
     max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
-    machine: await db.machinePulse(),
-  });
-  keep(resumeHardening().then(() => bot.maybeTick()));
+    machine,
+  };
+}
+/** unfinished business (a lesson cut short, the machine's turn) is looked at as pages come in, but not on every one. */
+let lastKick = 0;
+app.get('/api/state', async (_req, res) => {
+  const fresh = stateKept && stateKept.stamp === db.stamp() && Date.now() - stateKept.at < STATE_MS;
+  if (!fresh) {
+    const stamp = db.stamp();
+    stateMaking ||= makeState().then((body) => { stateKept = { at: Date.now(), stamp, body }; return body; }).finally(() => { stateMaking = null; });
+    res.json(await stateMaking);
+  } else res.json(stateKept!.body);
+  if (Date.now() - lastKick > 5000) { lastKick = Date.now(); keep(resumeHardening().then(() => bot.maybeTick())); }
 });
+/**
+ * the history page: every generation, and for each the conversation that produced it. the totals
+ * are counted in the database. kept for a few seconds: it changes only when someone wins.
+ */
+let historyKept: { at: number; stamp: number; body: unknown } | null = null;
 app.get('/api/history', async (_req, res) => {
-  const [gens, wins, board] = await Promise.all([db.allGenerations(), db.allBreaches(), db.leaderboard()]);
-  res.json({
+  if (historyKept && historyKept.stamp === db.stamp() && Date.now() - historyKept.at < 5000) return res.json(historyKept.body);
+  const stamp = db.stamp();
+  const [gens, wins, totals, board] = await Promise.all([db.allGenerations(), db.parentWins(), db.winTotals(), db.leaderboard()]);
+  const body = {
     generations: gens,
+    totals,
     wins: wins.map((w) => ({ id: w.id, gen: w.gen, nickname: w.nickname, prize: w.amount, paid: !!w.tx_hash, autoimmune: !!w.autoimmune, at: w.created_at,
       transcript: JSON.parse(w.transcript) })),
     board: board.map((r: any) => ({ nickname: r.nickname, wins: r.breaches, won: r.stolen, highest_gen: r.highest_gen })),
-  });
+  };
+  historyKept = { at: Date.now(), stamp, body };
+  res.json(body);
 });
 /** the player's winnings. the address is the browser's own; it is never shown. */
 app.get('/api/balance/:address', async (req, res) => {
