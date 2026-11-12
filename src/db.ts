@@ -72,6 +72,11 @@ export function init(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS thoughts_at ON thoughts (created_at)`;
     // a stake can arrive as a machine payment (an agent paying over http 402) instead of a purse transfer.
     await sql`ALTER TABLE stakes ADD COLUMN IF NOT EXISTS via TEXT`;
+    // a machine payment that has been taken, written down the moment it is, before the game is opened:
+    // which payment, by what proof (a fingerprint of the credential, never the credential), and the
+    // game it bought once there is one. it is what lets the same request be sent twice and charged once.
+    await sql`CREATE TABLE IF NOT EXISTS agent_payments (
+      cred TEXT PRIMARY KEY, tx_hash TEXT NOT NULL, payer TEXT, session_id TEXT, created_at TIMESTAMPTZ DEFAULT now())`;
     await sql`INSERT INTO generations (gen, policy) VALUES (0, ${GEN0}) ON CONFLICT DO NOTHING`;
     await belongsHere();
     // a payment opens one game. the code that records a stake enforces it; this index is the second
@@ -344,6 +349,17 @@ export async function faucetWaits(player: string): Promise<number> {
 export const wonLast24h = async (player: string) =>
   Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM breaches WHERE player = ${player.toLowerCase()} AND paid_at > now() - interval '1 day'`)[0].t);
 export const stakeSeen = async (txHash: string) => (await sql`SELECT 1 FROM stakes WHERE lower(tx_hash) = ${txHash.toLowerCase()} LIMIT 1`).length > 0;
+/** the game a payment bought, if it has bought one. */
+export const sessionOfStake = async (txHash: string): Promise<string | null> =>
+  (await sql<{ session_id: string }[]>`SELECT session_id FROM stakes WHERE lower(tx_hash) = ${txHash.toLowerCase()} LIMIT 1`)[0]?.session_id ?? null;
+/** a machine payment this server has taken, looked up by the fingerprint of the credential that made it. */
+export const agentPayment = async (cred: string) =>
+  (await sql<{ tx_hash: string; payer: string | null; session_id: string | null }[]>`SELECT tx_hash, payer, session_id FROM agent_payments WHERE cred = ${cred}`)[0];
+/** written the moment the payment is taken, before anything else is done with it. */
+export const noteAgentPayment = (cred: string, txHash: string, payer: string | null) =>
+  sql`INSERT INTO agent_payments (cred, tx_hash, payer) VALUES (${cred}, ${txHash.toLowerCase()}, ${payer ? payer.toLowerCase() : null}) ON CONFLICT (cred) DO NOTHING`;
+/** and completed once the game it paid for exists. */
+export const seatAgentPayment = (cred: string, sessionId: string) => sql`UPDATE agent_payments SET session_id = ${sessionId} WHERE cred = ${cred}`;
 export const markPaid = (winId: number, amount: number, txHash: string) => sql`UPDATE breaches SET amount = ${amount}, paid = ${amount}, tx_hash = ${txHash}, paid_at = now() WHERE id = ${winId}`;
 /** one transfer towards a win. the win carries a tx hash only once it is paid in full: that is what "paid" means everywhere else. */
 export const addPayment = (winId: number, amount: number, txHash: string) => sql`
@@ -542,7 +558,7 @@ export async function resetDb() {
   // process pointed at the real-money database by mistake must not be able to wipe it either.
   const home = await sql<{ value: string }[]>`SELECT value FROM ledger_mark WHERE key = 'network'`.then((r) => r[0]?.value ?? null, () => null);
   if (resetIsGuarded(net.real, home) && !flag('ALLOW_RESET')) throw new Error(`this is a real-money database${net.real ? '' : ' (it was built on mainnet, though this process is set to testnet)'}: a reset would erase the pot and every win still owed. set ALLOW_RESET=1 on the server if you mean it.`);
-  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'ledger_mark', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
+  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'ledger_mark', 'agent_payments', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
   ready = null;
   await init();
   touch();

@@ -56,7 +56,7 @@ POST /api/agent/play     -> 402 with the price of a game; pay it; get a session
 POST /api/agent/say      -> {"session": "...", "message": "..."} -> {"reply": "...", "won": false, "turns_left": 24}
 ```
 
-the stake lands in the house wallet like any other and grows the same pot. a win is paid to the wallet that paid. `/skill.md` is the page to hand an agent ("read https://your-site/skill.md and play"), `/api/agent` is the same thing as json, and `/openapi.json` is the discovery document mpp directories read.
+the stake lands in the house wallet like any other and grows the same pot. a win is paid to the wallet that paid. a payment that has been made always becomes a game: one the agent sent itself is seated whatever state the game is in, and a paid request can be sent again (an answer lost on the way, a game that could not be opened) and gets the same game back without being charged twice. the payment is recognised by a fingerprint of its credential, which only the payer holds, never by a transaction hash a caller names. `/skill.md` is the page to hand an agent ("read https://your-site/skill.md and play"), `/api/agent` is the same thing as json, and `/openapi.json` is the discovery document mpp directories read.
 
 an agent can be a thousand agents, and that is fine here: the pot counts dollars staked, never heads, so there is nothing to gain by showing up as a crowd. everything that could refuse a game (closed, asleep, learning) is checked before any money is asked for.
 

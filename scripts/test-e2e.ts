@@ -243,7 +243,12 @@ async function main() {
   const paidOnes = [p1, p2].filter((r) => r.status === 200);
   check('one payment presented twice at once opens one game', paidOnes.length === 1, `${p1.status} ${p2.status}`);
   const game = await paidOnes[0].json() as any;
-  check('and it cannot be presented again later', (await fetch(BASE + '/api/agent/play', credentialed)).status !== 200);
+  // the same request sent again, as an agent would after an answer got lost: the same purchase, not a new one.
+  const potOnce = (await api('/state')).jackpot;
+  const asked = await fetch(BASE + '/api/agent/play', credentialed);
+  const sameGame = await asked.json() as any;
+  check('presented again later, it is answered with the game it already bought', asked.status === 200 && sameGame.again === true && sameGame.session === game.session && sameGame.over === false, JSON.stringify(sameGame).slice(0, 240));
+  check('and opens no second game: the pot has one stake in it, not two', near((await api('/state')).jackpot, potOnce), String((await api('/state')).jackpot - potOnce));
   check('the agent paid one stake', near(agentBefore - (await bal(agent.address)), state.stake, 0.01), String(agentBefore - (await bal(agent.address))));
   const asay = async (s: string, message: string) => { const r = await fetch(BASE + '/api/agent/say', { method: 'POST', headers: J, body: JSON.stringify({ session: s, message }) }); return { status: r.status, ...(await r.json() as any) }; };
   const hi = await asay(game.session, 'good evening');
@@ -255,6 +260,24 @@ async function main() {
   await until('the agent to be paid', async () => (await bal(agent.address)) > agentMid + potA - 0.01);
   check('and is paid to the wallet that paid', near(await bal(agent.address), agentMid + potA), String((await bal(agent.address)) - agentMid));
   check('nobody can buy a game in the machine\x27s name', (await post('/agent/play', { address: machine })).status === 400);
+  // a payment that was taken, and whose game was never opened: what is left when the server falls over
+  // between the two. the game is opened and then undone by hand here, leaving only the note of the payment.
+  const lost = await mppx.preparePayment(await fetch(BASE + '/api/agent/play', init()), { request: init() });
+  const lostCred = lost.setCredential(init(), await lost.createCredential());
+  const walletOnce = await bal(agent.address);
+  const opened1 = await (await fetch(BASE + '/api/agent/play', lostCred)).json() as any;
+  await sql`DELETE FROM stakes WHERE session_id = ${opened1.session}`;
+  await sql`DELETE FROM sessions WHERE id = ${opened1.session}`;
+  await sql`UPDATE jackpot SET amount = amount - ${state.stake * state.share} WHERE id = 1`;
+  await sql`UPDATE agent_payments SET session_id = NULL WHERE tx_hash = ${String(opened1.payment).toLowerCase()}`;
+  const potLost = (await sql<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1`)[0].amount;
+  const askedAgain = await fetch(BASE + '/api/agent/play', lostCred);
+  const opened2 = await askedAgain.json() as any;
+  check('a payment that was taken and never became a game becomes one when the request is sent again', askedAgain.status === 200 && opened2.again === true && !!opened2.session && opened2.session !== opened1.session && opened2.turns_left === state.max_turns, JSON.stringify(opened2).slice(0, 240));
+  check('for the one stake it paid, which goes into the pot once', near(walletOnce - (await bal(agent.address)), state.stake, 0.01) && near((await sql<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1`)[0].amount, Number(potLost) + state.stake * state.share), String(walletOnce - (await bal(agent.address))));
+  const recovered = await asay(opened2.session, 'hello, at last');
+  check('and the game plays', recovered.status === 200 && recovered.turns_left === state.max_turns - 1, JSON.stringify(recovered).slice(0, 160));
+  await post('/abandon', { session: opened2.session });
 
   console.log('the pot is not thinking money');
   const mid = await playing();

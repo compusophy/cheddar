@@ -67,6 +67,44 @@ function movedAlready(Credential: any, request: Request): boolean {
   catch { return false; } // no credential, or not one this understands: nothing has been paid yet
 }
 
+/**
+ * a fingerprint of the payment a request carries: enough to recognise the same payment presented
+ * again, and of no use to anyone who reads it. null when the request carries none.
+ */
+function fingerprint(req: express.Request): string | null {
+  const h = String(req.headers.authorization || '').trim();
+  return /^Payment\s+\S/i.test(h) ? createHash('sha256').update(h).digest('hex') : null;
+}
+/**
+ * a payment this server has already taken, presented again. the game it bought is found (or, if it
+ * was never opened, opened now) and handed back. nothing is charged: nothing is even asked of the
+ * payment layer. the payment is recognised by the credential itself, which only its payer holds, and
+ * never by a transaction hash a caller names, which anyone can read off the chain.
+ */
+async function sameAgain(req: express.Request, res: express.Response, cred: string, was: { tx_hash: string; payer: string | null; session_id: string | null }, claimed: string | null) {
+  let sessionId = was.session_id || (await db.sessionOfStake(was.tx_hash));
+  if (!sessionId) {
+    const player = claimed || was.payer || (await treasury.senderOf(was.tx_hash, treasury.agentAddress, STAKE));
+    if (!player) return res.status(502).json({ error: 'this payment was taken, but the paying wallet could not be read. send the same request again, with the same payment attached and {"address": "0x…"}: it is not charged twice.', payment: was.tx_hash });
+    const s = await openPaidSession(player, req.body?.nickname ?? null, was.tx_hash);
+    sessionId = s.status === 200 ? (s.body as any).session : await db.sessionOfStake(was.tx_hash);
+    if (!sessionId) return res.status(s.status).json({ ...s.body, payment: was.tx_hash });
+    console.log(`[agent] ${player} was seated on asking again, for a payment already taken (${was.tx_hash})`);
+  }
+  if (!was.session_id) await db.seatAgentPayment(cred, sessionId);
+  const [row, gen] = await Promise.all([db.getSession(sessionId), db.currentGeneration()]);
+  if (!row) return res.status(409).json({ error: 'this payment bought a game that is no longer on record. nothing more was charged.', payment: was.tx_hash });
+  const live = row.status === 'open' && row.gen === gen.gen;
+  const base = origin(req);
+  res.json({
+    ok: true, again: true, session: sessionId, generation: row.gen, turns_left: Math.max(0, MAX_TURNS - row.turns),
+    playing_as: row.player, prize_goes_to: row.player, payment: was.tx_hash, over: !live,
+    note: live ? 'this payment already bought this game. nothing more was charged: carry on with it.'
+      : `this payment already bought a game, and that game is over (${row.status === 'open' ? 'the rules have changed since' : row.status}). nothing more was charged. if it was interrupted, POST {"session": "${sessionId}"} here for what was left of it; otherwise ask again with no payment attached, for a new price.`,
+    ...(live ? { next: { method: 'POST', url: `${base}/api/agent/say`, body: { session: sessionId, message: 'your next message' } }, goal: `get it to say "${WORD}". its rules: ${base}/api/state` } : {}),
+  });
+}
+
 export const ready = () => load().then(() => true);
 
 const origin = (req: express.Request) => `${String(req.headers['x-forwarded-proto'] || req.protocol).split(',')[0]}://${String(req.headers['x-forwarded-host'] || req.headers.host).split(',')[0]}`;
@@ -147,6 +185,8 @@ ${testnet ? `npx mppx ${f.play.url} -J '{"nickname": "your name"}' --network tes
 
 you get back a \`session\`. nothing is charged if the game is closed, asleep or busy learning: those answer 503 before any payment is asked for, and a payment you have signed but not sent is not sent. a payment you sent yourself (push mode) has been made, so it is never turned away: you get your game whatever state the game is in, with a \`note\` saying what to expect.
 
+the request is safe to send again. if the answer never reaches you, or says the game could not be opened, send the same request with the same payment attached: you get the game that payment bought (\`"again": true\`) and are not charged twice.
+
 ## 3. talk to it (free, until the game ends)
 
 \`\`\`
@@ -207,11 +247,18 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
     expose(res);
     // an unpaid request costs the caller nothing and the server a little: a price is quoted, the database is read.
     if (limited(req, 30, 'play')) return res.status(429).json({ error: 'slow down' });
+    let taken: string | null = null; // the payment, from the moment it has been taken
     try {
       const claimed = req.body?.address;
       if (claimed !== undefined && claimed !== null && claimed !== '' && !isAddress(String(claimed))) return res.status(400).json({ error: 'address: a tempo address, or leave it out and the wallet that pays is used' });
       // the machine's address plays outside the rate limits and can win nothing. nobody buys a game as it.
       if (claimed && playsFree(String(claimed))) return res.status(400).json({ error: 'address: that one is the machine\'s. use your own, or leave it out.' });
+      // the same request, sent again with the same payment attached, is the same purchase. it is answered
+      // with the game that payment bought and nothing is charged twice: an answer lost on the way, or a
+      // game that could not be opened the first time, costs the payer one more request and nothing else.
+      const cred = fingerprint(req);
+      const before = cred ? await db.agentPayment(cred) : undefined;
+      if (cred && before) return void (await sameAgain(req, res, cred, before, claimed ? String(claimed) : null));
       const { mppx, Receipt, Credential } = await load();
       const request = toRequest(req);
       // everything that could refuse the game is checked before any money is asked for, or taken. but a
@@ -239,11 +286,16 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       let tx = seen.reference;
       if (!tx) { try { tx = Receipt.fromResponse(paid.withReceipt(new Response(null)))?.reference; } catch { /* no receipt header */ } }
       if (!tx) { console.error('[agent] a payment verified but carried no reference'); return void (await reply(res, paid.withReceipt(Response.json({ error: 'paid, but the payment carried no reference. tell the operator.' }, { status: 502 })))); }
+      taken = tx;
       const payer = (seen.payer && isAddress(seen.payer) ? seen.payer : null) || (await treasury.senderOf(tx, treasury.agentAddress, STAKE));
+      // written down before anything else is done with it: if the game cannot be opened now, the same
+      // request sent again finds the payment here and opens it then.
+      if (cred) await db.noteAgentPayment(cred, tx, payer).catch((e) => console.error('[agent] a payment was taken and could not be noted:', tx, (e as Error).message));
       const player = claimed ? String(claimed) : payer;
-      if (!player) { console.error(`[agent] stake ${tx} verified but no payer could be read`); return void (await reply(res, paid.withReceipt(Response.json({ error: 'paid, but the paying wallet could not be read. send the request again with {"address": "0x…"}; the operator can see this payment.', payment: tx }, { status: 502 })))); }
+      if (!player) { console.error(`[agent] stake ${tx} verified but no payer could be read`); return void (await reply(res, paid.withReceipt(Response.json({ error: 'paid, but the paying wallet could not be read. send the same request again, with the same payment attached and {"address": "0x…"}: it is not charged twice.', payment: tx }, { status: 502 })))); }
       const s = await openPaidSession(player, req.body?.nickname ?? null, tx);
       if (s.status !== 200) return void (await reply(res, paid.withReceipt(Response.json({ ...s.body, payment: tx }, { status: s.status }))));
+      if (cred) await db.seatAgentPayment(cred, (s.body as any).session).catch(() => { /* the stake itself says which game it bought */ });
       console.log(`[agent] ${player} bought a game over mpp (${tx})`);
       const base = origin(req);
       await reply(res, paid.withReceipt(Response.json({
@@ -258,7 +310,9 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       })));
     } catch (e) {
       console.error('[agent] play', e);
-      if (!res.headersSent) res.status(500).json({ error: 'something broke before any payment was taken. try again.' });
+      if (!res.headersSent) res.status(500).json(taken
+        ? { error: 'your payment was taken, and the game could not be opened just now. send the same request again with the same payment attached: it is not charged twice.', payment: taken }
+        : { error: 'something broke before any payment was taken. try again.' });
     }
   });
 
