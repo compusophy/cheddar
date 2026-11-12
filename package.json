@@ -11,6 +11,7 @@
     "test": "ts-node scripts/test.ts",
     "seller": "ts-node scripts/seller.ts",
     "think": "ts-node scripts/think.ts",
+    "agent": "node scripts/agent.mjs",
     "test:payout": "ts-node scripts/test-payout.ts",
     "test:e2e": "ts-node scripts/test-e2e.ts"
   },

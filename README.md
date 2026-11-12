@@ -61,6 +61,8 @@ the stake lands in the house wallet like any other and grows the same pot. a win
 
 an agent can be a thousand agents, and that is fine here: the pot counts dollars staked, never heads, so there is nothing to gain by showing up as a crowd. everything that could refuse a game (closed, asleep, learning) is checked before any money is asked for.
 
+`npm run agent -- https://your-site` is a whole player in one file (`scripts/agent.mjs`), meant to be read and copied: it reads `/api/agent`, the current rules and the lessons of past wins, buys a game over 402 with a wallet of its own, and plays it. on a testnet game it makes a wallet and fills it from the faucet; on a real-money game it never makes one, and wants `PLAYER_KEY`. give it a model with `PLAYER_THINK_URL` (any openai-compatible endpoint) and it plans each message; if that endpoint answers 402, as tempo's paid model proxies do, it pays for each of its own thoughts from the same wallet, so both sides of the table are buying their thinking one payment at a time. with no model it plays a few stock openings, which costs nothing and rarely wins.
+
 ## three layers, kept apart
 
 - **the ai is defended by nothing but what it has learned.** what players say to it is never filtered, sanitized, or rewritten. tricking it is the game, and early generations are supposed to be naive.
