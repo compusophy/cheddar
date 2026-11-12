@@ -29,7 +29,13 @@ export const GRANT = net.real ? 0 : 1; // dollars the house gives a brand new pu
 export const GRANTS_PER_DAY = 20; // how many of those the house will hand out in a day
 export const STAKE = num('STAKE', 0.25);        // dollars per game
 export const JACKPOT_SHARE = Math.min(1, num('JACKPOT_SHARE', 0.8)); // of each stake into the pot; the rest covers inference + hosting
-export const JACKPOT_SEED = num('JACKPOT_SEED', 1);    // the pot after a win
+/**
+ * what the pot is reset to after a win. it is the house's own money, put up again every single time
+ * someone wins, so on real money it is nothing unless the operator says otherwise: an early ai falls
+ * to the first person who asks, and a seeded pot would pay each of them out of the house's pocket.
+ * on play money a dollar makes the first games worth playing.
+ */
+export const JACKPOT_SEED = num('JACKPOT_SEED', net.real ? 0 : 1);
 export const DAILY_CAP = num('DAILY_CAP', 100);     // dollars paid out per rolling 24h, all winners: the safety valve
 export const PURSE_DAILY_CAP = num('PURSE_DAILY_CAP', 20); // dollars one purse can win per rolling 24h
 

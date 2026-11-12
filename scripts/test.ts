@@ -110,6 +110,15 @@ async function main() {
   for (const t of [t1, t2, m1, c1]) if (t.ok) await db.releaseThought(t.id);
   check('a released thought gives its money back to the budget', Math.abs((await db.thoughtSpent24h()) - spentBefore) < 1e-9);
 
+  console.log('a ledger belongs to the network it was built on');
+  check('a marked ledger belongs where its mark says, whoever starts it', db.ledgerHome('testnet', true, 'mainnet') === 'testnet' && db.ledgerHome('mainnet', false, 'testnet') === 'mainnet');
+  check('a new, empty one belongs to whoever starts it', db.ledgerHome(null, false, 'mainnet') === 'mainnet' && db.ledgerHome(null, false, 'testnet') === 'testnet');
+  check('one with games in it and no mark is older than real money: it is play money, even when mainnet is starting it', db.ledgerHome(null, true, 'mainnet') === 'testnet');
+  check('a reset is guarded when the game is on real money, and when the ledger is, whatever the process thinks', db.resetIsGuarded(true, 'mainnet') && db.resetIsGuarded(true, null) && db.resetIsGuarded(false, 'mainnet'));
+  check('a play-money game resetting a play-money ledger, or a new one, is not', !db.resetIsGuarded(false, 'testnet') && !db.resetIsGuarded(false, null));
+  const [mark] = await db.sql<{ value: string }[]>`SELECT value FROM ledger_mark WHERE key = 'network'`;
+  check('and this database carries the mark of the network these tests run on', mark?.value === 'testnet', String(mark?.value));
+
   console.log('a spent budget says when it will have room again');
   const ago = (hours: number) => new Date(Date.now() - hours * 3600_000);
   const hoursUntil = (d: Date | null) => (d ? (d.getTime() - Date.now()) / 3600_000 : NaN);

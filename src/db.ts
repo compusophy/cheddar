@@ -73,6 +73,7 @@ export function init(): Promise<void> {
     // a stake can arrive as a machine payment (an agent paying over http 402) instead of a purse transfer.
     await sql`ALTER TABLE stakes ADD COLUMN IF NOT EXISTS via TEXT`;
     await sql`INSERT INTO generations (gen, policy) VALUES (0, ${GEN0}) ON CONFLICT DO NOTHING`;
+    await belongsHere();
     // a payment opens one game. the code that records a stake enforces it; this index is the second
     // lock on the same door. it is not allowed to stop the game starting: a table that already holds
     // a duplicate from before the rule existed just goes without it.
@@ -81,6 +82,43 @@ export function init(): Promise<void> {
   })().catch((e) => { ready = null; throw e; }); // a failed init must not poison the instance
   return ready;
 }
+
+/**
+ * a ledger belongs to the money it was built with.
+ *
+ * the pot and every win still owed are plain numbers in this database. built on play money they are
+ * play dollars; point the same database at mainnet and they become real debts the house never took
+ * in. so the database remembers which network it was started on, and the game will not run on it
+ * under the other one. a reset wipes the ledger and the mark with it, so a reset database belongs to
+ * whichever network reset it. to move a ledger across with its numbers intact, ALLOW_NETWORK_CHANGE=1
+ * lets it through and re-marks it.
+ */
+async function belongsHere() {
+  await sql`CREATE TABLE IF NOT EXISTS ledger_mark (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
+  let home = (await sql<{ value: string }[]>`SELECT value FROM ledger_mark WHERE key = 'network'`)[0]?.value ?? null;
+  if (!home) {
+    const [seen] = await sql<{ played: boolean }[]>`SELECT (EXISTS (SELECT 1 FROM sessions) OR EXISTS (SELECT 1 FROM stakes) OR EXISTS (SELECT 1 FROM breaches)) AS played`;
+    home = ledgerHome(null, !!seen.played, net.name);
+    await sql`INSERT INTO ledger_mark (key, value) VALUES ('network', ${home}) ON CONFLICT DO NOTHING`;
+  }
+  if (home === net.name) return;
+  if (flag('ALLOW_NETWORK_CHANGE')) {
+    console.warn(`[db] this ledger was built on ${home} and is being moved to ${net.name} because ALLOW_NETWORK_CHANGE is set. its pot and any win it owes come with it.`);
+    await sql`UPDATE ledger_mark SET value = ${net.name} WHERE key = 'network'`;
+    return;
+  }
+  throw new Error(`[db] this database was built on ${home} and the game is set to ${net.name}. its pot and the wins it owes are ${home} money: running on ${net.name} would turn them into ${net.real ? 'real debts' : 'play money'}. use a fresh database, wipe this one (npm run reset), or set ALLOW_NETWORK_CHANGE=1 if you mean to move it as it is.`);
+}
+/**
+ * the network a ledger belongs to. one that carries a mark belongs where the mark says. one with no
+ * mark and no games in it is new, and belongs to whoever is starting it. one with no mark but games
+ * already played is older than the mark, and nothing that old ever ran on real money: it is play money.
+ */
+export function ledgerHome(mark: string | null, played: boolean, starting: string): string {
+  return mark ?? (played ? 'testnet' : starting);
+}
+/** a reset touches real money when the game is set to it, or when the ledger was built on it. either way it takes ALLOW_RESET. */
+export const resetIsGuarded = (real: boolean, home: string | null) => real || home === 'mainnet';
 
 // ---------- the daily cap: the one rule that lives in code ----------
 
@@ -460,8 +498,11 @@ export const markBotTick = () => sql`INSERT INTO locks (name, holder, taken_at) 
 export async function resetDb() {
   // on real money a reset erases the pot and every win still owed. it does not happen by accident,
   // or to someone who merely got hold of the admin token: it takes a setting on the server as well.
-  if (net.real && !flag('ALLOW_RESET')) throw new Error('this is a real-money database: a reset would erase the pot and every win still owed. set ALLOW_RESET=1 on the server if you mean it.');
-  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
+  // what counts is the money in the ledger, not only what this process is set to: a play-money
+  // process pointed at the real-money database by mistake must not be able to wipe it either.
+  const home = await sql<{ value: string }[]>`SELECT value FROM ledger_mark WHERE key = 'network'`.then((r) => r[0]?.value ?? null, () => null);
+  if (resetIsGuarded(net.real, home) && !flag('ALLOW_RESET')) throw new Error(`this is a real-money database${net.real ? '' : ' (it was built on mainnet, though this process is set to testnet)'}: a reset would erase the pot and every win still owed. set ALLOW_RESET=1 on the server if you mean it.`);
+  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'ledger_mark', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
   ready = null;
   await init();
   touch();
