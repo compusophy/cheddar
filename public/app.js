@@ -64,7 +64,10 @@ function dryLine() {
   const left = Math.round(((Number(ls.get('dryUntil')) || 0) - Date.now()) / 1000);
   if (left <= 0) { ls.del('dryUntil'); ls.del('dryAsk'); ls.del('dryWhy'); return null; }
   const when = ` more in about ${howLong(left)}.`;
-  return ls.get('dryWhy') === 'house' ? `the house has given out today's play money.${when}` : `your purse is empty, and it has had today's ${money(state.grant)} from the house.${when}`;
+  const why = ls.get('dryWhy');
+  return why === 'house' ? `the house has given out today's play money.${when}`
+    : why === 'visitor' ? `the house has given your network its share of play money for today.${when}`
+    : `your purse is empty, and it has had today's ${money(state.grant)} from the house.${when}`;
 }
 /** the status line says an empty purse whenever it has nothing more pressing to say (see `status`). */
 const sayDry = () => { paintBalance(false); status(''); };
@@ -76,11 +79,12 @@ async function fillIfEmpty() {
   try { await api('/faucet', { method: 'POST', body: JSON.stringify({ address: purse.address }) }); ls.set('had', '1'); dry = null; ls.del('dryUntil'); ls.del('dryAsk'); ls.del('dryWhy'); }
   catch (e) {
     const b = e.body || {};
-    if (b.retry_after > 0 && (b.why === 'had' || b.why === 'house')) {
+    if (b.retry_after > 0 && (b.why === 'had' || b.why === 'house' || b.why === 'visitor')) {
       if (b.why === 'had') ls.set('had', '1');
-      // the purse's own day is known exactly. the house's count can free up sooner, so that one is asked about again before long.
+      // the purse's own day is known exactly. the house's count can free up sooner, and a visitor can
+      // move to another network, so those two are asked about again before long.
       ls.set('dryUntil', String(Date.now() + b.retry_after * 1000)); ls.set('dryWhy', b.why);
-      ls.set('dryAsk', String(Date.now() + (b.why === 'house' ? Math.min(b.retry_after, 600) : b.retry_after) * 1000));
+      ls.set('dryAsk', String(Date.now() + (b.why === 'had' ? b.retry_after : Math.min(b.retry_after, 600)) * 1000));
       dry = dryLine(); return sayDry();
     }
   }

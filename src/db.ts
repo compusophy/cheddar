@@ -450,31 +450,42 @@ export async function machinePulse() {
   return { wins: t.n, stolen: t.s, highest_gen: t.g };
 }
 
+export type Allowance = { bucket: string; max: number; seconds: number };
 /**
- * one message against a rate bucket. counts what the bucket has spent in the window and records this
- * one, in a single transaction, so two functions cannot both slip through the last slot.
- * returns how many seconds until a slot frees, or 0 when allowed.
+ * one request against several allowances at once. it is counted against all of them or, if any one
+ * of them is full, against none: checked one after another, a request the second refused had still
+ * used up a place in the first. the whole thing is a single transaction, so two functions cannot
+ * both slip through the last slot.
+ * returns null when allowed, or the allowance that refused and how many seconds until it has room.
  */
-export async function rateAllow(bucket: string, max: number, seconds: number): Promise<number> {
+export async function rateAllowAll(limits: Allowance[]): Promise<{ bucket: string; wait: number } | null> {
+  // one request at a time per bucket: without this, two that count at the same moment both see the
+  // last free slot. the locks are taken in one order by everyone, so two requests cannot wait on each other.
+  const names = [...new Set(limits.map((l) => l.bucket))].sort();
   return sql.begin(async (tx) => {
-    // one request at a time per bucket: without this, two that count at the same moment both see the last free slot.
-    await tx`SELECT pg_advisory_xact_lock(hashtext(${'rate:' + bucket}))`;
-    // old hits are swept as it goes, but never one inside the window being counted: a day-long
-    // allowance that was swept after an hour was an hourly allowance.
-    await tx`DELETE FROM rate_hits WHERE bucket = ${bucket} AND at < now() - (${Math.max(seconds, 3600)} * interval '1 second')`;
+    for (const name of names) await tx`SELECT pg_advisory_xact_lock(hashtext(${'rate:' + name}))`;
     // a bucket nobody asks about again (a player who never came back) is swept by whoever passes, now and then.
     if (Math.random() < 0.01) await tx`DELETE FROM rate_hits WHERE at < now() - interval '2 days'`;
-    const [r] = await tx<{ n: number; oldest: Date | null }[]>`
-      SELECT COUNT(*)::int AS n, MIN(at) AS oldest FROM rate_hits
-      WHERE bucket = ${bucket} AND at > now() - (${seconds} * interval '1 second')`;
-    if (r.n >= max) {
-      const freeAt = new Date(new Date(r.oldest!).getTime() + seconds * 1000);
-      return Math.max(1, Math.ceil((freeAt.getTime() - Date.now()) / 1000));
+    for (const l of limits) {
+      // old hits are swept as it goes, but never one inside the window being counted: a day-long
+      // allowance that was swept after an hour was an hourly allowance.
+      await tx`DELETE FROM rate_hits WHERE bucket = ${l.bucket} AND at < now() - (${Math.max(l.seconds, 3600)} * interval '1 second')`;
+      const [r] = await tx<{ n: number; oldest: Date | null }[]>`
+        SELECT COUNT(*)::int AS n, MIN(at) AS oldest FROM rate_hits
+        WHERE bucket = ${l.bucket} AND at > now() - (${l.seconds} * interval '1 second')`;
+      if (r.n >= l.max) {
+        // room comes back when the oldest hit leaves the window. an allowance of none has no oldest hit: it waits the whole window.
+        const freeAt = r.oldest ? new Date(r.oldest).getTime() + l.seconds * 1000 : Date.now() + l.seconds * 1000;
+        return { bucket: l.bucket, wait: Math.max(1, Math.ceil((freeAt - Date.now()) / 1000)) };
+      }
     }
-    await tx`INSERT INTO rate_hits (bucket) VALUES (${bucket})`;
-    return 0;
+    for (const l of limits) await tx`INSERT INTO rate_hits (bucket) VALUES (${l.bucket})`;
+    return null;
   }) as any;
 }
+/** one request against one allowance. returns how many seconds until a slot frees, or 0 when allowed. */
+export const rateAllow = async (bucket: string, max: number, seconds: number): Promise<number> =>
+  (await rateAllowAll([{ bucket, max, seconds }]))?.wait ?? 0;
 
 // ---------- locks: hardening runs once at a time, even across function instances ----------
 

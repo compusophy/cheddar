@@ -32,6 +32,11 @@ export const GRANT = net.real ? 0 : 1; // dollars the house stands a purse that 
  * and has a ceiling of its own (THINK_DAILY_CAP); this is about a day of that ceiling, in games.
  */
 export const GRANTS_PER_DAY = num('GRANTS_PER_DAY', 200);
+/**
+ * and how many of them one visitor's network may have. without it one script, taking a fresh purse
+ * each time, could have the whole day's worth in minutes and leave none for anyone else.
+ */
+export const GRANTS_PER_VISITOR = num('GRANTS_PER_VISITOR', 10);
 export const STAKE = num('STAKE', 0.25);        // dollars per game
 export const JACKPOT_SHARE = Math.min(1, num('JACKPOT_SHARE', 0.8)); // of each stake into the pot; the rest covers inference + hosting
 /**

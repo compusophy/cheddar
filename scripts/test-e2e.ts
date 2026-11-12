@@ -67,11 +67,12 @@ process.on('exit', stop);
 // ---------- a player with a purse of their own ----------
 type Purse = Awaited<ReturnType<typeof purse>>;
 let state: any;
-async function purse(nickname = 'tester') {
+let arrivals = 0;
+async function purse(nickname = 'tester', ip?: string) {
   const account = privateKeyToAccount(generatePrivateKey());
   const wallet = createWalletClient({ account, chain: tempoModerato, transport: http(RPC) });
   // each player arrives from an address of their own, as real players do: the per-visitor limits are per player here too.
-  const from = { ...J, 'x-real-ip': `198.51.100.${1 + Math.floor(Math.random() * 250)}` };
+  const from = { ...J, 'x-real-ip': ip ?? `198.51.${100 + Math.floor(arrivals / 250)}.${1 + (arrivals++ % 250)}` };
   const proof = async () => { const ts = Date.now(); return { ts, sig: await account.signMessage({ message: `say cheese purse: ${account.address.toLowerCase()} ${ts}` }) }; };
   const grant = () => api('/faucet', { method: 'POST', headers: from, body: JSON.stringify({ address: account.address }) });
   const send = async (to: string, amount: number) => {
@@ -109,7 +110,7 @@ async function main() {
   const common = { DATABASE_URL: DB, POSTGRES_URL: DB, DB_POOL: '1', NETWORK: 'testnet', AGENT_PRIVATE_KEY: houseKey, THINK_KEY: '', THINK_API_KEY: '', TOKEN_ADDRESS: '', TOKEN_SYMBOL: '' };
   start('seller', 'scripts/seller.ts', { ...common, SELLER_PORT: String(SELLER_PORT), SELLER_SPONSOR: '1' });
   await until('the stand-in model', async () => (await fetch(`http://localhost:${SELLER_PORT}/`)).ok, 120_000);
-  start('game', 'src/server.ts', { ...common, PORT: String(PORT), ADMIN_TOKEN: ADMIN, BOT: '0', REDTEAM_ADDRESS: machine, CLOSED: '', PAYOUTS_OFF: '',
+  start('game', 'src/server.ts', { ...common, PORT: String(PORT), ADMIN_TOKEN: ADMIN, BOT: '0', REDTEAM_ADDRESS: machine, CLOSED: '', PAYOUTS_OFF: '', GRANTS_PER_VISITOR: '3', GRANTS_PER_DAY: '',
     THINK_URL: `http://localhost:${SELLER_PORT}/v1/chat/completions`, THINK_NETWORK: 'testnet', THINK_MODE: '', MODEL: '', PATCH_MODEL: '', LESSON_SECONDS: '' });
   await until('the game', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
   const wiped = await fetch(BASE + '/api/admin/reset', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } });
@@ -137,6 +138,15 @@ async function main() {
   check('an empty purse that has had today\'s dollar is told so, and when the next one comes', dry.status === 429 && dry.why === 'had' && dry.retry_after > 86000 && dry.retry_after <= 86400, JSON.stringify(dry));
   await nap(3000);
   check('and is given nothing', (await g.balance()) < 0.25, String(await g.balance()));
+  // one visitor, a fresh purse every time: the house's dollar is for a crowd, not for one script.
+  const sameDoor = '203.0.113.77';
+  const takers = await Promise.all(Array.from({ length: 5 }, () => purse('taker', sameDoor)));
+  const taken = await Promise.all(takers.map((p) => p.grant()));
+  const turnedAway = taken.filter((r) => r.status === 429);
+  check('five fresh purses from one network, at once: three are given a dollar, the share of one visitor here', taken.filter((r) => r.status === 200).length === 3 && turnedAway.length === 2, `${taken.map((r) => r.status)}`);
+  check('the others are told it is their network, and when', turnedAway.every((r) => r.why === 'visitor' && r.retry_after > 86000), JSON.stringify(turnedAway[0]));
+  const elsewhere = await (await purse('elsewhere')).grant();
+  check('and a purse from anywhere else is still given its dollar', elsewhere.status === 200, JSON.stringify(elsewhere));
 
   console.log('a stake becomes one game');
   const a = await purse('alice');

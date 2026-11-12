@@ -5,6 +5,7 @@ dotenv.config();
 import * as db from '../src/db';
 import { DAILY_CAP, JACKPOT_SEED, saidIt } from '../src/game';
 import { suiteFor, pooled, REGRESSION_MAX } from '../src/immune';
+import { network } from '../src/visitor';
 
 let passed = 0; const failures: string[] = [];
 const check = (name: string, cond: boolean, detail = '') => {
@@ -201,6 +202,30 @@ async function main() {
   check('with room for four, it is let through', (await db.rateAllow(daily, 4, 86400)) === 0);
   check('an hourly allowance on the same bucket only looks back an hour', (await db.rateAllow(daily, 2, 3600)) === 0);
   await db.sql`DELETE FROM rate_hits WHERE bucket = ${daily}`;
+
+  console.log('two allowances are taken together or not at all');
+  const mineB = 'rate-mine-' + Date.now(), allB = 'rate-all-' + Date.now();
+  const hitsIn = async (b: string) => (await db.sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM rate_hits WHERE bucket = ${b}`)[0].n;
+  const both = (mine: number, all: number) => db.rateAllowAll([{ bucket: mineB, max: mine, seconds: 86400 }, { bucket: allB, max: all, seconds: 86400 }]);
+  check('with room in both, it is let through and counted in both', (await both(2, 3)) === null && (await hitsIn(mineB)) === 1 && (await hitsIn(allB)) === 1);
+  await db.rateAllow(allB, 3, 86400); await db.rateAllow(allB, 3, 86400); // others fill the shared one
+  const shut = await both(2, 3);
+  check('with the shared one full, it is refused and told which and for how long', shut?.bucket === allB && shut.wait > 86000, JSON.stringify(shut));
+  check('and the refusal used up no place of its own', (await hitsIn(mineB)) === 1, String(await hitsIn(mineB)));
+  await db.sql`DELETE FROM rate_hits WHERE bucket = ${allB}`;
+  const rush = await Promise.all(Array.from({ length: 9 }, () => both(2, 100)));
+  check('nine at once against a share of two (one already used): one more gets through', rush.filter((x) => x === null).length === 1 && rush.filter((x) => x?.bucket === mineB).length === 8, JSON.stringify(rush.map((x) => x?.bucket ?? 'ok')));
+  check('and the shared one counted only that one', (await hitsIn(allB)) === 1, String(await hitsIn(allB)));
+  await db.sql`DELETE FROM rate_hits WHERE bucket IN (${mineB}, ${allB})`;
+
+  console.log('a visitor is a network, not an address');
+  check('an ipv4 address is itself', network('203.0.113.7') === '203.0.113.7' && network(' 203.0.113.7:4431 ') === '203.0.113.7');
+  check('an ipv4 address written the ipv6 way is the same visitor', network('::ffff:203.0.113.7') === '203.0.113.7');
+  check('two ipv6 addresses in one /64 are one visitor', network('2001:db8:aa:bb:1:2:3:4') === network('2001:0db8:00aa:00bb:ffff:ffff:ffff:ffff') && network('2001:db8:aa:bb::1') === '2001:db8:aa:bb::/64', network('2001:db8:aa:bb:1:2:3:4'));
+  check('two in different /64s are two', network('2001:db8:aa:bb::1') !== network('2001:db8:aa:bc::1'));
+  check('a short one is written out before it is cut', network('2001:db8::1') === '2001:db8:0:0::/64' && network('::1') === '0:0:0:0::/64', `${network('2001:db8::1')} ${network('::1')}`);
+  check('brackets, a port and a zone do not make a new visitor', network('[2001:db8:aa:bb::1]:443') === '2001:db8:aa:bb::/64' && network('fe80::1%eth0') === 'fe80:0:0:0::/64', `${network('[2001:db8:aa:bb::1]:443')} ${network('fe80::1%eth0')}`);
+  check('nothing at all, or nonsense, is still an answer', network('') === 'unknown' && network('not an address') === 'not an address');
 
   console.log('one message at a time in a game');
   const tp = '0x00000000000000000000000000000000000000e1';

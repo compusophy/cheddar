@@ -7,7 +7,8 @@ import { isAddress, verifyMessage } from 'viem';
 import * as db from './db';
 import { MAX_TURNS, MAX_MESSAGE_CHARS, MODEL } from './agent';
 import * as think from './think';
-import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED, GRANT, GRANTS_PER_DAY } from './game';
+import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED, GRANT, GRANTS_PER_DAY, GRANTS_PER_VISITOR } from './game';
+import { network } from './visitor';
 import { openSession, runChat, peek, abandon, resumeHardening, settleUnpaid } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
@@ -37,12 +38,13 @@ app.use(async (_req, res, next) => {
  * who is asking. behind a proxy, express sees the proxy's address for every visitor, and a limit
  * "per visitor" keyed on it is one shared limit for everybody: sixty messages a minute for the whole
  * site. the platform puts the real address in a header that it overwrites itself, so a visitor
- * cannot set it.
+ * cannot set it. what comes back is the visitor's network (see visitor.ts): for ipv6 that is the
+ * half of the address they cannot change by asking nicely.
  */
 export function visitor(req: express.Request): string {
   const real = String(req.headers['x-real-ip'] || '').trim();
   const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return real || fwd || req.ip || 'unknown';
+  return network(real || fwd || req.ip || '');
 }
 const hits = new Map<string, number[]>();
 /** a visitor's requests in the last minute, by kind. the costly kinds get a smaller allowance. */
@@ -223,8 +225,18 @@ app.post('/api/faucet', async (req, res) => {
   if (Number(await treasury.balance(address)) >= STAKE + 0.02) return res.status(409).json({ error: 'that purse can already afford a game', why: 'funded' });
   // the purse's dollar for the day is taken in a single step, so of many requests at once only one goes on to be paid.
   if (!(await db.claimFaucet(address))) return res.status(429).json({ error: 'this purse has had its dollar from the house today', why: 'had', retry_after: Math.max(1, await db.faucetWaits(address)) });
-  const full = await db.rateAllow('grant', GRANTS_PER_DAY, 86400);
-  if (full) { await db.unclaimFaucet(address); return res.status(429).json({ error: "the house has given out today's play money", why: 'house', retry_after: full }); }
+  // two allowances for the day: the house's, and this visitor's share of it. counted together or not
+  // at all, so a visitor who is refused has used up nobody's place, their own included.
+  const full = await db.rateAllowAll([
+    { bucket: 'grant-by:' + visitor(req), max: GRANTS_PER_VISITOR, seconds: 86400 },
+    { bucket: 'grant', max: GRANTS_PER_DAY, seconds: 86400 },
+  ]);
+  if (full) {
+    await db.unclaimFaucet(address);
+    return res.status(429).json(full.bucket === 'grant'
+      ? { error: "the house has given out today's play money", why: 'house', retry_after: full.wait }
+      : { error: 'the house has given your network its share of play money for today', why: 'visitor', retry_after: full.wait });
+  }
   const r = await treasury.pay(address, String(GRANT));
   // a transfer that certainly did not happen leaves the purse free to ask again. one that may still land does not.
   if (!r.ok && !r.maybe) await db.unclaimFaucet(address);
