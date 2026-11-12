@@ -246,18 +246,33 @@ export async function resumeHardening(): Promise<void> {
  * released.
  */
 const owedOf = (w: db.Breach) => (w.tx_hash ? 0 : Math.max(0, Number(w.amount) - Number(w.paid ?? 0)));
-async function payout(win: db.Breach): Promise<string | null> {
+async function payout(given: db.Breach): Promise<string | null> {
+  // first, anything already sent towards this win and not yet accounted for. nothing new is signed
+  // until the chain has said what became of it: that is what makes a prize impossible to pay twice.
+  for (const p of await db.paymentsInFlight(given.id)) {
+    const o = await treasury.outcomeOf(p.tx_hash, Number(p.valid_before ?? 0));
+    if (o === 'landed') { await db.settleReservation(p.id, p.tx_hash); await db.addPayment(given.id, Number(p.amount), p.tx_hash); console.log(`[payout] win #${given.id}: an earlier payment of $${p.amount} had landed (${p.tx_hash})`); }
+    else if (o === 'failed' || o === 'expired') { await db.releaseReservation(p.id); console.warn(`[payout] win #${given.id}: an earlier payment ${o === 'failed' ? 'was refused' : 'never landed'}; its money is free again`); }
+    else return 'an earlier payment for this win is still in flight';
+  }
+  const win = (await db.breachById(given.id))!;
   const owed = owedOf(win);
   if (owed <= 0) return null;
   if (flag('PAYOUTS_OFF')) { console.warn(`[payout] win #${win.id} held: payouts are switched off`); return 'payouts are switched off'; }
-  const rsv = await db.reserveUpTo(win.player, owed, PURSE_DAILY_CAP, win.session_id);
+  const rsv = await db.reserveUpTo(win.player, owed, PURSE_DAILY_CAP, win.session_id, win.id);
   if (!rsv.ok) { console.warn(`[payout] win #${win.id} deferred: ${rsv.why}`); return rsv.why; }
-  const r = await treasury.pay(win.player, String(rsv.amount));
-  if (!r.ok) { await db.releaseReservation(rsv.id); console.error(`[payout] win #${win.id} failed: ${r.error}`); return `transfer failed: ${r.error}`; }
-  await db.settleReservation(rsv.id, r.hash);
-  await db.addPayment(win.id, rsv.amount, r.hash);
+  let signed: treasury.Signed;
+  try { signed = await treasury.signPayment(win.player, rsv.amount); }
+  catch (e) { await db.releaseReservation(rsv.id); console.error(`[payout] win #${win.id} could not be signed: ${(e as Error).message}`); return `transfer failed: ${(e as Error).message.slice(0, 120)}`; }
+  // written down before it is sent: from here on the chain can always be asked what happened to it.
+  await db.signedReservation(rsv.id, signed.hash, signed.validBefore);
+  const o = await treasury.broadcast(signed);
+  if (o === 'failed' || o === 'expired') { await db.releaseReservation(rsv.id); console.error(`[payout] win #${win.id}: the transfer ${o === 'failed' ? 'was refused' : 'never landed'}`); return 'transfer failed'; }
+  if (o !== 'landed') { console.warn(`[payout] win #${win.id}: payment ${signed.hash} sent, not yet seen. it will be looked up before anything else is sent.`); return 'a payment is in flight'; }
+  await db.settleReservation(rsv.id, signed.hash);
+  await db.addPayment(win.id, rsv.amount, signed.hash);
   const left = owed - rsv.amount;
-  console.log(`[payout] win #${win.id}: $${rsv.amount}${left > 0.000001 ? ` of $${owed}, $${left.toFixed(6)} still owed` : ''} (${r.hash})`);
+  console.log(`[payout] win #${win.id}: $${rsv.amount}${left > 0.000001 ? ` of $${owed}, $${left.toFixed(6)} still owed` : ''} (${signed.hash})`);
   return left > 0.000001 ? 'part paid: the rest waits for the daily cap' : null;
 }
 

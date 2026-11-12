@@ -111,6 +111,7 @@ what is true on both networks:
 
 - **gas comes out of the same dollars.** on tempo a transfer pays its fee in the token it moves, and the most it could cost is set aside before the transfer runs. so "send all" sends everything but that, and a game needs the stake plus a couple of cents.
 - **a stake always becomes a game.** the page keeps the hash of a stake until the server has opened a session for it. a dropped connection or a closed tab costs a moment, never the stake.
+- **a win is paid exactly once.** a payment is signed with a nonce that expires: it names a moment after which it can never be included, and its hash is known and written down before it is sent. it counts as paid only when the chain shows it in a block. if the answer is lost on the way back, nothing is sent again until the chain has been asked, by that hash, what happened: it landed, or it was refused, or its moment passed. so a prize the node took but the chain dropped is not recorded as paid, and a prize whose answer got lost is not paid twice.
 - **a win is always paid.** the pot has no ceiling and the daily caps do, so a prize can be bigger than a cap. it is paid in parts as the day rolls, never refused. the ten-minute timer sweeps anything still owed, and `POST /api/admin/settle` does it on demand.
 - **a purse can move.** copy its key in one browser, paste it in another, two presses.
 
@@ -137,6 +138,7 @@ vercel env pull         # DATABASE_URL into .env.local
 npm run think           # can the house think? shows the wallet, its balance, the price ceilings
 npm run dev             # http://localhost:3000
 npm test
+npm run test:payout     # the payout against the testnet. refuses any database that is not local.
 ```
 
 to run everything on play money, with no real dollars at all, start the stand-in model. it charges over mpp on the testnet and answers with a few lines of code instead of a network, which is enough to exercise every part of the loop: the stake, the paid reply, the win, the rewrite, the regression replay, the payout.

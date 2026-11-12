@@ -1,17 +1,14 @@
-import { createWalletClient, createPublicClient, http, defineChain, encodeFunctionData, parseUnits, formatUnits, isAddress, decodeEventLog } from 'viem';
+import { createClient, createPublicClient, http, encodeFunctionData, parseUnits, formatUnits, isAddress, decodeEventLog, keccak256 } from 'viem';
+import { prepareTransactionRequest, signTransaction, sendRawTransaction } from 'viem/actions';
 import { privateKeyToAccount } from 'viem/accounts';
+import { tempo as tempoMainnet, tempoModerato } from 'viem/chains';
 import { net } from './net';
 
 /** the stablecoin every stake and prize is paid in, on whichever network this deployment runs. */
 const TOKEN = net.token;
 
-export const tempoChain = defineChain({
-  id: net.chainId,
-  name: `tempo ${net.name}`,
-  network: net.name,
-  nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 18 },
-  rpcUrls: { default: { http: [net.rpc] }, public: { http: [net.rpc] } },
-});
+/** tempo, as viem knows it: its transaction type carries the fee token and the expiring nonce used below. */
+export const tempoChain = net.real ? tempoMainnet : tempoModerato;
 
 const erc20Abi = [
   { name: 'transfer', type: 'function', stateMutability: 'nonpayable',
@@ -22,14 +19,13 @@ const erc20Abi = [
     inputs: [{ name: 'from', type: 'address', indexed: true }, { name: 'to', type: 'address', indexed: true }, { name: 'value', type: 'uint256', indexed: false }] },
 ] as const;
 
-const publicClient = createPublicClient({ chain: tempoChain, transport: http() });
+const publicClient = createPublicClient({ chain: tempoChain, transport: http(net.rpc) });
 
 function isValidHexKey(key: string): key is `0x${string}` {
   return /^0x[0-9a-fA-F]{64}$/.test(key);
 }
 
 const rawKey = (process.env.AGENT_PRIVATE_KEY || '').trim();
-let walletClient: ReturnType<typeof createWalletClient> | null = null;
 export let agentAddress: `0x${string}` = '0x0000000000000000000000000000000000000000';
 
 if (!isValidHexKey(rawKey)) {
@@ -37,7 +33,7 @@ if (!isValidHexKey(rawKey)) {
 }
 const account = privateKeyToAccount(rawKey);
 agentAddress = account.address;
-walletClient = createWalletClient({ account, chain: tempoChain, transport: http() });
+const wallet = createClient({ account, chain: tempoChain, transport: http(net.rpc) });
 console.log(`[treasury] agent wallet ${agentAddress} on ${net.name} (${net.symbol}${net.real ? ', REAL MONEY' : ''})`);
 
 export async function balance(address: `0x${string}` = agentAddress): Promise<string> {
@@ -50,18 +46,77 @@ export async function balance(address: `0x${string}` = agentAddress): Promise<st
   }
 }
 
+/**
+ * a payment out of the house, made so that it can only ever happen once.
+ *
+ * the old way sent a transfer and called it paid the moment the node took it. two things could go
+ * wrong, and with real money both cost someone: a transfer the node took but the chain never
+ * included was recorded as paid (the winner got nothing), and a transfer whose answer was lost on
+ * the way back was recorded as failed and sent again (the house paid twice).
+ *
+ * so a payment is now three steps the caller can stop between:
+ *   1. sign it. the transaction uses tempo's expiring nonce: it names a moment after which it can
+ *      never be included, and its hash is known before it is sent. the caller writes the hash down.
+ *   2. send it, and wait to see it in a block.
+ *   3. if the answer is unclear, ask the chain later by that hash. it either landed, or failed, or
+ *      its moment passed and it never will. only then may anything be sent again.
+ * an expiring nonce also means two payments signed at the same moment cannot collide.
+ */
+export type Signed = { hash: `0x${string}`; validBefore: number; serialized: `0x${string}` };
+export type Outcome = 'landed' | 'failed' | 'pending' | 'expired';
+/** how long a signed payment stays sendable. tempo refuses one that is too close to its limit, so this is not much. */
+const VALID_SECONDS = 25;
+
+export async function signPayment(to: string, amount: number | string): Promise<Signed> {
+  if (!isAddress(to)) throw new Error('invalid recipient address');
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('invalid amount');
+  const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to as `0x${string}`, parseUnits(n.toFixed(6), 6)] });
+  const validBefore = Math.floor(Date.now() / 1000) + VALID_SECONDS;
+  // the fee is paid in the token being sent, so the house needs to hold nothing else.
+  const request = await prepareTransactionRequest(wallet, { to: TOKEN, data, feeToken: TOKEN, nonceKey: 'expiring', validBefore } as any);
+  const serialized = (await signTransaction(wallet, request as any)) as `0x${string}`;
+  return { hash: keccak256(serialized), validBefore, serialized };
+}
+
+/** what became of a signed payment, as the chain tells it. never guesses: an answer it cannot get is "pending". */
+export async function outcomeOf(hash: string, validBefore: number): Promise<Outcome> {
+  try {
+    const r = await publicClient.getTransactionReceipt({ hash: hash as `0x${string}` });
+    return r.status === 'success' ? 'landed' : 'failed';
+  } catch (e) {
+    if ((e as Error).name !== 'TransactionReceiptNotFoundError') return 'pending';
+  }
+  try {
+    const block = await publicClient.getBlock();
+    // a few seconds past its limit, by the chain's own clock, and still in no block: it never will be.
+    return Number(block.timestamp) > validBefore + 5 ? 'expired' : 'pending';
+  } catch { return 'pending'; }
+}
+
+/** send a signed payment and watch for it. "pending" means: not seen yet, ask again with `outcomeOf`. */
+export async function broadcast(p: Signed): Promise<Outcome> {
+  let refused = '';
+  try { await sendRawTransaction(wallet, { serializedTransaction: p.serialized }); }
+  catch (e) { refused = (e as Error).message; } // the node may hold it all the same: the chain decides, not this error
+  const until = Date.now() + (refused ? 6_000 : 20_000);
+  for (;;) {
+    const o = await outcomeOf(p.hash, p.validBefore);
+    if (o !== 'pending') return o;
+    if (Date.now() >= until) { if (refused) console.error('[treasury] payment not seen after a refusal:', refused.slice(0, 200)); return 'pending'; }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+}
+
 export type PayResult = { ok: true; hash: string } | { ok: false; error: string };
 
-/** sends the stablecoin from the agent wallet on tempo. every call moves money; on mainnet, real money. */
+/** sign, send and confirm in one go, for payments nothing else depends on (the welcome grant). */
 export async function pay(to: string, amount: string): Promise<PayResult> {
-  if (!isAddress(to)) return { ok: false, error: 'invalid recipient address' };
-  const n = Number(amount);
-  if (!Number.isFinite(n) || n <= 0) return { ok: false, error: 'invalid amount' };
   try {
-    const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to as `0x${string}`, parseUnits(n.toFixed(6), 6)] });
-    const hash = await walletClient!.sendTransaction({ to: TOKEN, data, account, chain: tempoChain });
-    console.log(`[treasury] paid ${n} ${net.symbol} to ${to}: ${hash}`);
-    return { ok: true, hash };
+    const p = await signPayment(to, amount);
+    const o = await broadcast(p);
+    if (o === 'landed') { console.log(`[treasury] paid ${amount} ${net.symbol} to ${to}: ${p.hash}`); return { ok: true, hash: p.hash }; }
+    return { ok: false, error: o === 'failed' ? 'the transfer was refused' : 'the transfer was not confirmed' };
   } catch (e) {
     console.error('[treasury] pay error', (e as Error).message);
     return { ok: false, error: (e as Error).message };

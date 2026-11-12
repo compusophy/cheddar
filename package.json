@@ -10,7 +10,8 @@
     "reset": "ts-node scripts/reset.ts",
     "test": "ts-node scripts/test.ts",
     "seller": "ts-node scripts/seller.ts",
-    "think": "ts-node scripts/think.ts"
+    "think": "ts-node scripts/think.ts",
+    "test:payout": "ts-node scripts/test-payout.ts"
   },
   "dependencies": {
     "@vercel/functions": "^3.9.7",

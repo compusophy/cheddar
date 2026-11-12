@@ -44,6 +44,11 @@ export function init(): Promise<void> {
     // how much of a win has left the house so far. a prize bigger than a daily cap is paid in parts.
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS paid DOUBLE PRECISION NOT NULL DEFAULT 0`;
     await sql`ALTER TABLE generations ADD COLUMN IF NOT EXISTS lesson TEXT`;
+    // a payment towards a win: which win, the moment after which its transaction can never land, and
+    // whether the chain has confirmed it. a row with a hash and no confirmation is a payment in flight.
+    await sql`ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS win_id INT`;
+    await sql`ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS valid_before BIGINT`;
+    await sql`ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS confirmed INT NOT NULL DEFAULT 0`;
     // how many times a lesson has been started for this win. one that keeps failing to finish is cut down.
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`;
     // every thought the ai paid for: what it was for, which model, what it cost, and the payment that bought it.
@@ -84,7 +89,7 @@ export async function reserveDisbursement(recipient: string, amount: number, ses
  * the rest stays owed and is paid as the window rolls. less than a cent of headroom is not worth a
  * transfer, unless a cent is more than what is owed.
  */
-export async function reserveUpTo(recipient: string, want: number, purseCap: number, sessionId: string | null): Promise<{ ok: true; id: number; amount: number } | { ok: false; why: string }> {
+export async function reserveUpTo(recipient: string, want: number, purseCap: number, sessionId: string | null, winId: number | null = null): Promise<{ ok: true; id: number; amount: number } | { ok: false; why: string }> {
   const who = recipient.toLowerCase();
   return sql.begin(async (tx) => {
     await tx`LOCK TABLE disbursements IN SHARE ROW EXCLUSIVE MODE`;
@@ -93,11 +98,17 @@ export async function reserveUpTo(recipient: string, want: number, purseCap: num
     const house = DAILY_CAP - Number(g.total), purse = purseCap - Number(p.total);
     const amount = Math.floor(Math.min(want, house, purse) * 1e6 + 1e-6) / 1e6;
     if (!(amount > 0) || amount < Math.min(want, 0.01) - 1e-9) return { ok: false as const, why: house <= purse ? 'daily cap' : 'purse daily cap' };
-    const [row] = await tx<{ id: number }[]>`INSERT INTO disbursements (recipient, amount, tx_hash, session_id) VALUES (${who}, ${amount}, NULL, ${sessionId}) RETURNING id`;
+    const [row] = await tx<{ id: number }[]>`INSERT INTO disbursements (recipient, amount, tx_hash, session_id, win_id) VALUES (${who}, ${amount}, NULL, ${sessionId}, ${winId}) RETURNING id`;
     return { ok: true as const, id: row.id, amount };
   }) as any;
 }
-export const settleReservation = (id: number, txHash: string) => sql`UPDATE disbursements SET tx_hash = ${txHash} WHERE id = ${id}`;
+/** the payment has been signed: its hash and its limit are written down before it is sent anywhere. */
+export const signedReservation = (id: number, txHash: string, validBefore: number) => sql`UPDATE disbursements SET tx_hash = ${txHash}, valid_before = ${validBefore} WHERE id = ${id}`;
+/** the chain has confirmed it. */
+export const settleReservation = (id: number, txHash: string) => sql`UPDATE disbursements SET tx_hash = ${txHash}, confirmed = 1 WHERE id = ${id}`;
+/** payments towards a win that were signed and have not been confirmed or given up on: in flight. */
+export const paymentsInFlight = (winId: number) => sql<{ id: number; amount: number; tx_hash: string; valid_before: string | null }[]>`
+  SELECT id, amount, tx_hash, valid_before FROM disbursements WHERE win_id = ${winId} AND tx_hash IS NOT NULL AND confirmed = 0 ORDER BY id ASC`;
 export const releaseReservation = (id: number) => sql`DELETE FROM disbursements WHERE id = ${id}`;
 
 // ---------- thinking money: the ai pays for its own inference, one payment per thought ----------
