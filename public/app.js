@@ -140,9 +140,16 @@ async function checkCarry() {
   try { const r = await peek(); carry = r.session ? null : (r.carry || null); } catch { /* ask again later */ }
   paintAgain();
 }
-async function loadState() {
+/**
+ * the game's state: the pot, the generation, whether it is learning or asleep. asked for every few
+ * seconds while the page is being looked at, and not at all while it is not. `fresh` is for when
+ * this page has just changed something itself and an answer a couple of seconds old would be wrong.
+ */
+async function loadState(fresh) {
+  // a tab nobody is looking at does not ask. it asks the moment it is looked at again (see below).
+  if (document.hidden && state && fresh !== true) { clearTimeout(poll); poll = setTimeout(loadState, 10000); return; }
   // one failed request must not end the polling: on a phone the network drops all the time.
-  try { state = await api('/state'); }
+  try { state = await api(fresh === true ? '/state?fresh=' + Date.now() : '/state'); }
   catch { clearTimeout(poll); poll = setTimeout(loadState, 5000); return; }
   word = state.word;
   const learning = state.learning;
@@ -166,6 +173,7 @@ async function loadState() {
   lastGen = state.gen;
   clearTimeout(poll); poll = setTimeout(loadState, learning ? 3000 : 10000);
 }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state) loadState(); });
 // the rulebook is a dialogue, not something that shoves the conversation down the page.
 const sheet = (id, open) => $(id).classList.toggle('hidden', !open);
 $('#gen').onclick = () => {
@@ -445,7 +453,7 @@ $('#form').addEventListener('submit', async (e) => {
 });
 $('#msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#form').requestSubmit(); } });
 $('#msg').addEventListener('input', (e) => { e.target.style.height = ''; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; });
-function end() { $('#form').classList.add('hidden'); $('#again').classList.remove('hidden'); session = null; showAbandon(); loadState().then(checkCarry); }
+function end() { $('#form').classList.add('hidden'); $('#again').classList.remove('hidden'); session = null; showAbandon(); loadState(true).then(checkCarry); }
 
 /** start over: two presses, because it forfeits the rest of a paid game. */
 let armed = null;

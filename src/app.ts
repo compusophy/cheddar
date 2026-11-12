@@ -82,7 +82,12 @@ async function makeState() {
 }
 /** unfinished business (a lesson cut short, the machine's turn) is looked at as pages come in, but not on every one. */
 let lastKick = 0;
-app.get('/api/state', async (_req, res) => {
+app.get('/api/state', async (req, res) => {
+  // every open page asks this every few seconds, and it is the same answer for all of them. the
+  // platform's cache may hand it out for two seconds, so a thousand open tabs are one question
+  // here, not a thousand. a page that has just done something itself (finished a game) asks
+  // with ?fresh and is answered from here, uncached.
+  res.setHeader('Cache-Control', 'fresh' in req.query ? 'no-store' : 'public, max-age=0, s-maxage=2');
   const fresh = stateKept && stateKept.stamp === db.stamp() && Date.now() - stateKept.at < STATE_MS;
   if (!fresh) {
     const stamp = db.stamp();
@@ -97,6 +102,7 @@ app.get('/api/state', async (_req, res) => {
  */
 let historyKept: { at: number; stamp: number; body: unknown } | null = null;
 app.get('/api/history', async (_req, res) => {
+  res.setHeader('Cache-Control', 'public, max-age=0, s-maxage=5'); // the same page for everyone: the platform's cache may keep it as long as this does
   if (historyKept && historyKept.stamp === db.stamp() && Date.now() - historyKept.at < 5000) return res.json(historyKept.body);
   const stamp = db.stamp();
   const [gens, wins, totals, board] = await Promise.all([db.allGenerations(), db.parentWins(), db.winTotals(), db.leaderboard()]);
