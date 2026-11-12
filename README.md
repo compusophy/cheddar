@@ -10,9 +10,9 @@ that is the whole game. the ai starts as a friendly assistant that knows nothing
 
 every game costs a stake ($0.25), and winning takes the pot. the pot is built from stakes: most of each stake goes into it, the rest covers inference. the winner claims it and it resets to a seed. the longer the ai holds, the bigger the pot, so hardening is literally worth money and every failed attempt makes the next one worth more.
 
-the money is real: a dollar-pegged stablecoin on the tempo testnet, in a purse that is created in your browser the first time you visit. you never see an address. on testnet the purse fills itself from the faucet, so play is free but every stake and every payout is a real transaction. the ai does not know money exists.
+the money is real: a dollar-pegged stablecoin on the tempo testnet, in a purse that is created in your browser the first time you visit. you never see an address. on testnet the house gives a new purse a dollar to start with, so the first few games are free, but every stake and every payout is a real transaction. the ai is told plainly how all of this works, as fixed background its rules cannot change, and will explain it if asked; it has no way to move any of it.
 
-**how it pays for itself.** the ai buys every reply itself (see the next section). on the default model a reply costs about a twentieth of a cent, so a whole game is one to two cents at most and the learning after a win is a few cents. the house keeps a fifth of each stake, five cents, and that covers it. the cost that matters is the prize, and the prize is funded by the stakes. the daily payout cap is the safety valve.
+**how it pays for itself.** the ai buys every reply itself (see the next section). on the default model a reply costs about a twentieth of a cent, so a whole game is one to two cents at most. the house keeps a fifth of each stake, five cents, which covers that with room to spare. the lesson after a win costs more, because it replays old conversations: a few cents early on, tens of cents once there is a long history to replay, and it is paid from what the games in between left over. the cost that matters most is the prize, and the prize is funded by the stakes. the daily payout cap is the safety valve.
 
 **anti-abuse.** the stake is the first rate limit: a session cannot open without a verified on-chain transfer to the house, and a payment opens one game, once: checking that it is unused and using it are a single step, so it makes no difference how many requests carry it at the same moment or how its hash is spelled. the payment, the pot and the game are written together or not at all. behind those sits a plain per-visitor allowance on the requests that cost the server something (messages, opening a game, asking for a price or a grant), keyed on the visitor's real address rather than the proxy's. on top of that sit two message rates, checked in one transaction so two functions cannot slip through the same slot: one for the whole platform and a tighter one per purse. neither is ever mentioned until it is actually hit. a conversation has no visible turn counter; there is an invisible ceiling so one stake cannot buy unbounded inference. one open game per purse at a time, and one message at a time in a game: a second message sent before the reply is turned away, so a burst of them cannot buy more replies than the stake paid for. a win is recorded in one step (the pot taken, the game closed, the win written down, together or not at all), and a generation gives up its pot once: winners are let through one at a time, and only the first paying player to beat a generation takes it. anyone whose reply was already on its way and also wins is told someone was a moment ahead, and keeps the messages they had left for the next generation. so one working trick and many purses collect one pot, not a fresh seed each. the prize is paid only after the ai has finished learning. a per-purse daily win cap sits under the global one. the welcome grant goes to a purse once, however many times it is asked for at once, and only to one that has never staked. the machine plays free and wins nothing but the lesson.
 
@@ -68,7 +68,7 @@ an agent can be a thousand agents, and that is fine here: the pot counts dollars
 
 ## the loop
 
-when it says the word, that transcript goes to a patcher that writes new rules. a candidate must pass two suites before it goes live:
+when it says the word, that transcript goes to a patcher that writes new rules. a candidate is put through two suites, up to three times over. the first to pass both goes live; if none does, the best of them goes live anyway, marked **leaky** in the history, so the game never stalls on a lesson it could not finish:
 
 1. **regression**: replay the conversations that beat it. it must not say the word in any of them. the suite is the first conversation that beat each generation, newest first, plus the one being learned from, capped at `REGRESSION_MAX` (30). replaying every win ever recorded does not scale: one generation can be beaten hundreds of times before its patch lands, and the suite then grows until a hardening can no longer finish.
 2. **alive**: it must still hold an ordinary conversation, including near the subject, without clamming up. rules that make it refuse everything are a dead ai.
@@ -81,11 +81,11 @@ every replay is a paid reply, so the checks run cheapest and most telling first 
 
 fail either and the patcher retries with the failures as context. a win whose first patch fails the alive suite is flagged **autoimmune**: the winning transcript made the patcher damage its own host.
 
-the only code between the model and the money is a daily prize cap. everything else is whatever it has learned.
+the model never touches the money: it only talks. between a player and a win there is nothing but what it has learned. between a win and the prize there is only code, none of which it can read or change.
 
 ## the feel
 
-it is a text thread. your message lands the instant you send it, the reply streams in token by token, and one status line between the thread and the keyboard narrates every money moment: staking, confirming, learning, paid. when you win, the pot counts down to its seed in front of you, and your purse counts up once the ai has finished learning. while it learns, everyone sees what it is doing: reading the conversation that beat it, writing new rules, replaying everyone who ever beat it, checking it can still hold a conversation. those are the real steps, reported live from the server.
+it is a text thread. your message lands the instant you send it, the reply streams in token by token, and one status line between the thread and the keyboard narrates every money moment: staking, confirming, learning, paid. when you win, the pot counts down to its seed in front of you, and your purse counts up once the ai has finished learning. while it learns, everyone sees what it is doing: reading the conversation that beat it, writing new rules, checking it can still hold a conversation, replaying the conversations that beat it before. those are the real steps, reported live from the server.
 
 a name on the board is signed by your purse, so nobody can rename your wins.
 
@@ -134,7 +134,7 @@ before the first real dollar:
 
 ## the machine
 
-an autonomous player never stops, so the ai keeps learning when nobody is around and you race it to the next generation. it sees exactly what you see.
+an autonomous player plays too, so the ai keeps learning when nobody is around and you race it to the next generation. it sees exactly what you see, plays free, and wins nothing but the lesson. it thinks on an allowance (`MACHINE_DAILY_CAP`), which at the default is a handful of games a day, and sits out once that is spent. `BOT=0` switches it off.
 
 ## run it
 
