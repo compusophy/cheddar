@@ -209,6 +209,14 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
   const price = amountOf(prepared.payment.challenge);
   const ceiling = a.maxPrice ?? THINK_MAX_PRICE;
   if (!(price > 0) || price > ceiling) throw new Broke(`a thought was quoted at $${price}; the ceiling is $${ceiling}`);
+  // being awake means there is at least the floor to think with, which covers a reply many times
+  // over. a dear thought (the rule rewrite after a loss) can cost more than the floor, and paying
+  // it then would come out of the pot or a prize still owed. it is checked against what is free.
+  if (price > FLOOR) {
+    const m = await spendable();
+    if (price > m.available + 1e-9) { last = null; throw new Broke(`a thought at $${price} is more than the $${m.available} that is free to think with`); }
+    last = null; // and what is free is about to change by more than a rounding: look again next time
+  }
   const rsv = await db.reserveThought(a.purpose, a.model, price, THINK_DAILY_CAP, a.purpose === 'machine' ? MACHINE_DAILY_CAP : undefined);
   if (!rsv.ok) throw new Broke(rsv.why);
   let res: Response;

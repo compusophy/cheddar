@@ -575,8 +575,11 @@ async function lookForMoney() {
   if (balance > had + 0.000001) {
     paintBalance(true);
     const said = `${money(balance - had)} arrived.`;
-    if (!$('#cashout').classList.contains('hidden')) $('#cashstatus').textContent = said + (balance >= needed() ? ' you can play.' : '');
-    else if (!session && !sending) status(said, 'ok');
+    // real money has just landed in a purse whose key lives in this browser and nowhere else. said once, here,
+    // at the moment it starts to matter, to anyone who has not yet copied the key.
+    const keep = state.real && !ls.get('keySaved') ? ' copy your key now and keep it somewhere safe: if this browser forgets it, this money is gone.' : '';
+    if (!$('#cashout').classList.contains('hidden')) $('#cashstatus').textContent = said + (balance >= needed() ? ' you can play.' : '') + keep;
+    else if (!session && !sending) status(said + (keep ? ' open your purse and copy its key before you play.' : ''), 'ok');
   } else paintBalance(false);
 }
 function openPurse() {
@@ -589,7 +592,11 @@ $('#cashclose').onclick = closePurse;
 // and on coming back to the page from somewhere else (a wallet, most likely), one look.
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state) lookForMoney(); });
 $('#cashnick').addEventListener('change', (e) => saveName(e.target.value));
-$('#cashkey').onclick = async () => { try { await navigator.clipboard.writeText(purse.key); $('#cashstatus').textContent = 'copied. keep it safe.'; } catch { prompt('your secret key', purse.key); } };
+$('#cashkey').onclick = async () => {
+  try { await navigator.clipboard.writeText(purse.key); $('#cashstatus').textContent = 'copied. keep it safe: it is the only way back to this purse.'; }
+  catch { prompt('your secret key', purse.key); }
+  ls.set('keySaved', '1'); // they have been shown it, at least: the reminder below stops
+};
 $('#addrcopy').onclick = async () => { try { await navigator.clipboard.writeText(purse.address); $('#addrcopy').textContent = 'copied'; setTimeout(() => { $('#addrcopy').textContent = 'copy'; }, 1500); } catch { prompt('your purse address', purse.address); } };
 /**
  * everything in the purse, sent somewhere else. it cannot be taken back, so it takes two presses:

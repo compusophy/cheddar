@@ -147,6 +147,9 @@ export async function abandon(sessionId: string) {
 }
 
 export async function runChat(sessionId: string, message: string, onDelta?: (t: string) => void): Promise<ChatResult & { hardening?: Promise<void> }> {
+  // a nul character cannot be stored. left in, a message that won would be replayed in the lesson,
+  // paid for, and then refused by the database when the lesson tried to keep it, over and over.
+  if (typeof message === 'string') message = message.replace(/\u0000/g, '');
   if (typeof message !== 'string' || !message.trim()) return { status: 400, body: { error: 'say something' } };
   if (message.length > MAX_MESSAGE_CHARS) return { status: 400, body: { error: `${MAX_MESSAGE_CHARS} characters max` } };
   const seen = await db.getSession(String(sessionId));
@@ -288,7 +291,7 @@ async function payout(given: db.Breach): Promise<string | null> {
   // until the chain has said what became of it: that is what makes a prize impossible to pay twice.
   for (const p of await db.paymentsInFlight(given.id)) {
     const o = await treasury.outcomeOf(p.tx_hash, Number(p.valid_before ?? 0));
-    if (o === 'landed') { await db.settleReservation(p.id, p.tx_hash); await db.addPayment(given.id, Number(p.amount), p.tx_hash); console.log(`[payout] win #${given.id}: an earlier payment of $${p.amount} had landed (${p.tx_hash})`); }
+    if (o === 'landed') { await db.landPayment(p.id, given.id, Number(p.amount), p.tx_hash); console.log(`[payout] win #${given.id}: an earlier payment of $${p.amount} had landed (${p.tx_hash})`); }
     else if (o === 'failed' || o === 'expired') { await db.releaseReservation(p.id); console.warn(`[payout] win #${given.id}: an earlier payment ${o === 'failed' ? 'was refused' : 'never landed'}; its money is free again`); }
     else return 'an earlier payment for this win is still in flight';
   }
@@ -303,11 +306,15 @@ async function payout(given: db.Breach): Promise<string | null> {
   catch (e) { await db.releaseReservation(rsv.id); console.error(`[payout] win #${win.id} could not be signed: ${(e as Error).message}`); return `transfer failed: ${(e as Error).message.slice(0, 120)}`; }
   // written down before it is sent: from here on the chain can always be asked what happened to it.
   await db.signedReservation(rsv.id, signed.hash, signed.validBefore);
+  const written = signed.hash;
   const o = await treasury.broadcast(signed);
+  // the node may know the payment by another name than the one worked out before sending. that is the name on record from here on.
+  if (signed.hash !== written) await db.signedReservation(rsv.id, signed.hash, signed.validBefore);
   if (o === 'failed' || o === 'expired') { await db.releaseReservation(rsv.id); console.error(`[payout] win #${win.id}: the transfer ${o === 'failed' ? 'was refused' : 'never landed'}`); return 'transfer failed'; }
   if (o !== 'landed') { console.warn(`[payout] win #${win.id}: payment ${signed.hash} sent, not yet seen. it will be looked up before anything else is sent.`); return 'a payment is in flight'; }
-  await db.settleReservation(rsv.id, signed.hash);
-  await db.addPayment(win.id, rsv.amount, signed.hash);
+  // confirmed and credited to the win together. if this does not get written, the payment is still
+  // on record as signed and unconfirmed, and the next sweep finds it on the chain and writes it then.
+  await db.landPayment(rsv.id, win.id, rsv.amount, signed.hash);
   const left = owed - rsv.amount;
   console.log(`[payout] win #${win.id}: $${rsv.amount}${left > 0.000001 ? ` of $${owed}, $${left.toFixed(6)} still owed` : ''} (${signed.hash})`);
   return left > 0.000001 ? 'part paid: the rest waits for the daily cap' : null;

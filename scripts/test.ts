@@ -47,6 +47,8 @@ async function main() {
   check('a purse with no game open is free to play', !(await db.hasOpenSession(p1)));
   await db.createSession('gate-test', 0, p1, null);
   check('a purse with a game open resumes it', (await db.openSessionFor(p1))?.id === 'gate-test');
+  await db.sql`UPDATE sessions SET updated_at = now() - interval '5 hours' WHERE id = 'gate-test'`;
+  check('however long it has sat: a paid game is not forgotten for being idle', (await db.openSessionFor(p1))?.id === 'gate-test');
   await db.updateSession('gate-test', [], 0, 'exhausted');
   check('a finished game frees the purse', !(await db.hasOpenSession(p1)));
   await db.sql`DELETE FROM sessions WHERE id = 'gate-test'`;

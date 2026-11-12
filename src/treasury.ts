@@ -89,15 +89,30 @@ export async function outcomeOf(hash: string, validBefore: number): Promise<Outc
   }
   try {
     const block = await publicClient.getBlock();
-    // a few seconds past its limit, by the chain's own clock, and still in no block: it never will be.
-    return Number(block.timestamp) > validBefore + 5 ? 'expired' : 'pending';
+    // well past its limit by the chain's own clock, and still in no block: it never will be.
+    if (Number(block.timestamp) <= validBefore + EXPIRY_MARGIN) return 'pending';
   } catch { return 'pending'; }
+  // "it never landed" is the one answer that lets a payment be sent again, so it is not taken from a
+  // single look. the first "not found" may have come from a node that was behind the one that just
+  // gave the time. it is asked once more, now that the limit is known to have passed.
+  try {
+    const r = await publicClient.getTransactionReceipt({ hash: hash as `0x${string}` });
+    return r.status === 'success' ? 'landed' : 'failed';
+  } catch (e) { return (e as Error).name === 'TransactionReceiptNotFoundError' ? 'expired' : 'pending'; }
 }
+/** how far past its limit, in seconds of chain time, a payment must be before it is called expired. */
+const EXPIRY_MARGIN = 20;
 
 /** send a signed payment and watch for it. "pending" means: not seen yet, ask again with `outcomeOf`. */
 export async function broadcast(p: Signed): Promise<Outcome> {
   let refused = '';
-  try { await sendRawTransaction(wallet, { serializedTransaction: p.serialized }); }
+  try {
+    const named = await sendRawTransaction(wallet, { serializedTransaction: p.serialized });
+    // the hash was worked out here before sending, and everything after looks the payment up by it.
+    // if the node calls the same transaction something else, the node's name is the one the chain
+    // will know it by: the caller is handed that one, and writes it down in place of ours.
+    if (named && named.toLowerCase() !== p.hash.toLowerCase()) { console.error(`[treasury] the node names this payment ${named}, not ${p.hash}. using the node's.`); p.hash = named; }
+  }
   catch (e) { refused = (e as Error).message; } // the node may hold it all the same: the chain decides, not this error
   const until = Date.now() + (refused ? 6_000 : 20_000);
   for (;;) {

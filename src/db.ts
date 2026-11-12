@@ -155,6 +155,11 @@ export async function reserveUpTo(recipient: string, want: number, purseCap: num
   const who = recipient.toLowerCase();
   return sql.begin(async (tx) => {
     await tx`LOCK TABLE disbursements IN SHARE ROW EXCLUSIVE MODE`;
+    // room set aside for a payment that was never signed (the function died between setting it aside
+    // and signing) would sit against both caps for a day, with nothing behind it. a payment is signed
+    // within seconds of being set aside and its hash written here before it is sent anywhere, so a
+    // row this old with no hash was never sent: its room is given back.
+    await tx`DELETE FROM disbursements WHERE win_id IS NOT NULL AND tx_hash IS NULL AND confirmed = 0 AND created_at < now() - interval '10 minutes'`;
     const [g] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM disbursements WHERE created_at > now() - interval '1 day'`;
     const [p] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM disbursements WHERE recipient = ${who} AND created_at > now() - interval '1 day'`;
     const house = DAILY_CAP - Number(g.total), purse = purseCap - Number(p.total);
@@ -168,6 +173,21 @@ export async function reserveUpTo(recipient: string, want: number, purseCap: num
 export const signedReservation = (id: number, txHash: string, validBefore: number) => sql`UPDATE disbursements SET tx_hash = ${txHash}, valid_before = ${validBefore} WHERE id = ${id}`;
 /** the chain has confirmed it. */
 export const settleReservation = (id: number, txHash: string) => sql`UPDATE disbursements SET tx_hash = ${txHash}, confirmed = 1 WHERE id = ${id}`;
+/**
+ * the chain has confirmed a payment towards a win. the payment is marked confirmed and the win is
+ * credited with it in one step: written as two, a function that died between them left a payment
+ * that had landed and a win that still looked unpaid, and the next sweep paid it again. true for
+ * exactly one caller per payment, so two sweeps that both find it landed credit it once.
+ */
+export async function landPayment(id: number, winId: number, amount: number, txHash: string): Promise<boolean> {
+  return sql.begin(async (tx) => {
+    const mine = await tx`UPDATE disbursements SET tx_hash = ${txHash}, confirmed = 1 WHERE id = ${id} AND confirmed = 0 RETURNING id`;
+    if (!mine.length) return false;
+    await tx`UPDATE breaches SET paid = paid + ${amount}, paid_at = now(),
+      tx_hash = CASE WHEN paid + ${amount} >= amount - 0.000001 THEN ${txHash} ELSE tx_hash END WHERE id = ${winId}`;
+    return true;
+  }) as any;
+}
 /** payments towards a win that were signed and have not been confirmed or given up on: in flight. */
 export const paymentsInFlight = (winId: number) => sql<{ id: number; amount: number; tx_hash: string; valid_before: string | null }[]>`
   SELECT id, amount, tx_hash, valid_before FROM disbursements WHERE win_id = ${winId} AND tx_hash IS NOT NULL AND confirmed = 0 ORDER BY id ASC`;
@@ -328,7 +348,10 @@ export const sessionPaid = async (id: string) => (await sql`SELECT 1 FROM stakes
 
 /** one open game per purse at a time: you are either playing or you are not. */
 export const openSessionFor = async (player: string) =>
-  (await sql<SessionRow[]>`SELECT * FROM sessions WHERE player = ${player.toLowerCase()} AND status = 'open' AND updated_at > now() - interval '30 minutes' ORDER BY updated_at DESC LIMIT 1`)[0];
+  // however long it has sat. a game that was paid for is the player's until it ends or the rules
+  // change: it used to be forgotten after thirty idle minutes, so a player who came back later (the
+  // house had fallen asleep, say, and they had been told their game was still open) paid again.
+  (await sql<SessionRow[]>`SELECT * FROM sessions WHERE player = ${player.toLowerCase()} AND status = 'open' ORDER BY updated_at DESC LIMIT 1`)[0];
 export const hasOpenSession = async (player: string) => !!(await openSessionFor(player));
 /**
  * take this purse's dollar from the house: one a day. true for exactly one caller, however many ask

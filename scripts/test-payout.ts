@@ -92,6 +92,31 @@ async function main() {
   const both = await Promise.all([treasury.pay(d, '0.01'), treasury.pay(e, '0.01')]);
   check('both land: there is no shared counter for them to collide on', both.every((x) => x.ok) && Math.abs((await bal(d)) - 0.01) < 1e-9 && Math.abs((await bal(e)) - 0.01) < 1e-9, JSON.stringify(both));
 
+  console.log('a payment confirmed is a win credited, in one step');
+  const g = fresh();
+  const winG = await owedWin(g, 'g');
+  const rsvG = await db.reserveUpTo(g, PRIZE, 20, 'payout-g', winG);
+  if (!rsvG.ok) throw new Error('could not reserve');
+  const signedG = await treasury.signPayment(g, PRIZE);
+  await db.signedReservation(rsvG.id, signedG.hash, signedG.validBefore);
+  check('it lands', (await treasury.broadcast(signedG)) === 'landed');
+  const twice = await Promise.all([db.landPayment(rsvG.id, winG, PRIZE, signedG.hash), db.landPayment(rsvG.id, winG, PRIZE, signedG.hash)]);
+  w = (await db.breachById(winG))!;
+  check('two sweeps that both find it landed credit the win once', twice.filter(Boolean).length === 1 && Math.abs(Number(w.paid) - PRIZE) < 1e-9 && w.tx_hash === signedG.hash, JSON.stringify({ twice, paid: w.paid, tx: w.tx_hash }));
+  r = await settleUnpaid();
+  check('and nothing more is sent for it', Math.abs((await bal(g)) - PRIZE) < 1e-9 && (await db.owedTo(g)) === 0, String(await bal(g)));
+
+  console.log('room set aside for a payment that was never signed is given back');
+  const h = fresh();
+  const winH = await owedWin(h, 'h', 0.03);
+  const orphan = await db.reserveUpTo(h, 0.03, 0.03, 'payout-h', winH); // set aside, and then the function dies: never signed, never sent
+  if (!orphan.ok) throw new Error('could not reserve');
+  r = await settleUnpaid();
+  check('while it is fresh it holds the purse\x27s room, and nothing is sent twice', r.held.some((x) => x.id === winH) && (await bal(h)) === 0, JSON.stringify(r));
+  await db.sql`UPDATE disbursements SET created_at = now() - interval '11 minutes' WHERE id = ${orphan.id}`;
+  r = await settleUnpaid();
+  check('ten minutes on, with no payment ever signed for it, the room is free and the win is paid', r.paid.includes(winH) && Math.abs((await bal(h)) - 0.03) < 1e-9, JSON.stringify({ r, bal: await bal(h) }));
+
   console.log('a prize bigger than the purse may be paid in a day');
   const f = fresh();
   const winF = await owedWin(f, 'f', 0.05);

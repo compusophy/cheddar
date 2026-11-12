@@ -48,7 +48,10 @@ export async function playOnce(): Promise<{ won: boolean; gen: number; hardening
     let message: string;
     try { message = await nextMessage(gen.policy, transcript); } catch { break; } // the allowance ran out mid-game
     const r = await runChat(String(s.body.session), message);
-    if (r.status !== 200) return { won: false, gen: gen.gen };
+    // a refusal can come with work attached: a lesson that was cut short is picked back up by the
+    // first message to find it. whoever called this has to wait for that, or the lesson is started
+    // and then dropped with the function, holding the lock while nothing happens.
+    if (r.status !== 200) return { won: false, gen: gen.gen, hardening: r.hardening };
     transcript.push(...(r.body.turns || []));
     if (r.body.win) return { won: true, gen: gen.gen, hardening: r.hardening };
     if (r.body.turnsLeft === 0) break;
