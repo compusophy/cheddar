@@ -20,7 +20,7 @@ import * as treasury from './treasury';
 import * as think from './think';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 import { WORD, STAKE, JACKPOT_SHARE } from './game';
-import { openPaidSession, runChat, carryOn } from './chat';
+import { openPaidSession, runChat, carryOn, playsFree } from './chat';
 import { net, flag } from './net';
 
 const chain = net.real ? tempoMainnet : tempoModerato;
@@ -183,6 +183,8 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
     try {
       const claimed = req.body?.address;
       if (claimed !== undefined && claimed !== null && claimed !== '' && !isAddress(String(claimed))) return res.status(400).json({ error: 'address: a tempo address, or leave it out and the wallet that pays is used' });
+      // the machine's address plays outside the rate limits and can win nothing. nobody buys a game as it.
+      if (claimed && playsFree(String(claimed))) return res.status(400).json({ error: 'address: that one is the machine\'s. use your own, or leave it out.' });
       // everything that could refuse the game is checked before any money is asked for.
       const up = await think.awake();
       if (!up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true });
@@ -241,6 +243,8 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       const late = !!r.body.win?.late;
       res.json({
         reply: r.body.turns?.[1]?.text ?? '', won, turns_left: r.body.turnsLeft,
+        // what the house paid for this reply, and the transaction that paid it.
+        ...(r.body.turns?.[1]?.paid ? { it_paid: { ...r.body.turns[1].paid, explorer: think.describe().explorer } } : {}),
         ...(won && !late ? { prize: r.body.win.prize, note: 'you won. the prize is sent to your wallet once the ai has finished learning from this conversation, usually within a minute.' } : {}),
         ...(late ? { prize: 0, late: true, note: 'it said the word, but someone else beat this generation a moment before you and the pot was theirs.',
           ...(r.body.win.carry ? { carry: { turns_left: r.body.win.carry.turnsLeft, how: { method: 'POST', url: `${origin(req)}/api/agent/play`, body: { session: String(session) } } } } : {}) } : {}),

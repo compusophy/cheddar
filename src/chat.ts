@@ -30,7 +30,9 @@ const LOCK = 'harden';
  * followed by a sentence about what was learned and by the payout, so it stops well short of that.
  */
 const LESSON_MS = Math.max(20, num('LESSON_SECONDS', 200)) * 1000;
-const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()]);
+const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()].filter(Boolean));
+/** the machine's own address: it plays free, outside the rate limits, and can win nothing. */
+export const playsFree = (address: string) => FREE_PLAYERS.has(String(address).toLowerCase());
 
 /** open a session. `stakeTx` is the hash of the purse's transfer to the house; verified before anything else. */
 export async function openSession(player: string, nickname: string | null, stakeTx?: string) {

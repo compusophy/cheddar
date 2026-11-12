@@ -174,7 +174,7 @@ if (MODE && MODE !== 'pull' && MODE !== 'push') throw new Error(`[think] THINK_M
 let pushUntil = 0;
 
 /** one attempt at one paid request. `paid` is false only when nothing can have left the wallet. */
-async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Response; paid: boolean; sellerFailed: boolean }> {
+async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Response; paid: boolean; sellerFailed: boolean; cost: number; tx: string | null }> {
   const { mppx, Receipt } = await load();
   const init: RequestInit = {
     method: 'POST',
@@ -188,7 +188,7 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
     // no offer the wallet is allowed to accept: wrong token, wrong chain, or dearer than the ceiling.
     throw new Broke(`no payable offer from the model: ${(e as Error).message.slice(0, 200)}`);
   }
-  if (!prepared.payment) return { res: prepared.response, paid: false, sellerFailed: false };
+  if (!prepared.payment) return { res: prepared.response, paid: false, sellerFailed: false, cost: 0, tx: null };
   // the same question the game asks before it takes a stake, asked again before every payment: a
   // game already under way does not get to think with money that is promised to a winner.
   const up = await awake();
@@ -215,21 +215,28 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
   await db.settleThought(rsv.id, tx);
   // a seller that answers 5xx without a receipt took the signed payment and could not finish its
   // half. the row stays counted (the signature was handed over), and the caller may try push.
-  return { res, paid: true, sellerFailed: res.status >= 500 && !tx };
+  return { res, paid: true, sellerFailed: res.status >= 500 && !tx, cost: price, tx };
 }
 
-/** one thought, paid for. returns the model's text. throws `Broke` when the house cannot or will not pay. */
-export async function ask(a: Ask): Promise<string> {
+/** what one thought cost and the payment that bought it. `null` when the endpoint asked for nothing. */
+export type Paid = { cost: number; tx: string | null } | null;
+
+/** one thought, paid for: the model's text and the receipt. throws `Broke` when the house cannot or will not pay. */
+export async function askPaid(a: Ask): Promise<{ text: string; paid: Paid }> {
   const pushing = MODE === 'push' || Date.now() < pushUntil;
-  let { res, sellerFailed } = await attempt(a, pushing ? 'push' : undefined);
-  if (sellerFailed && !pushing && MODE !== 'pull') {
-    console.warn(`[think] the seller could not complete a sponsored payment (${res.status}). paying our own fee for the next ten minutes.`);
+  let t = await attempt(a, pushing ? 'push' : undefined);
+  if (t.sellerFailed && !pushing && MODE !== 'pull') {
+    console.warn(`[think] the seller could not complete a sponsored payment (${t.res.status}). paying our own fee for the next ten minutes.`);
     pushUntil = Date.now() + 10 * 60_000;
-    ({ res, sellerFailed } = await attempt(a, 'push'));
+    t = await attempt(a, 'push');
   }
+  const { res } = t;
   if (!res.ok) throw new Error(`[think] the model answered ${res.status}: ${(await res.text().catch(() => '')).slice(0, 300)}`);
-  return a.onDelta ? readStream(res, a.onDelta) : (((await res.json()) as any)?.choices?.[0]?.message?.content ?? '');
+  const text: string = a.onDelta ? await readStream(res, a.onDelta) : (((await res.json()) as any)?.choices?.[0]?.message?.content ?? '');
+  return { text, paid: t.paid ? { cost: t.cost, tx: t.tx } : null };
 }
+/** the same, for callers that only want the words. */
+export const ask = async (a: Ask): Promise<string> => (await askPaid(a)).text;
 
 /** an openai-style event stream: `data: {json}` lines, a `[DONE]` at the end, comment lines in between. */
 async function readStream(res: Response, onDelta: (t: string) => void): Promise<string> {

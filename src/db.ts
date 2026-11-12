@@ -376,6 +376,8 @@ export async function machinePulse() {
  */
 export async function rateAllow(bucket: string, max: number, seconds: number): Promise<number> {
   return sql.begin(async (tx) => {
+    // one request at a time per bucket: without this, two that count at the same moment both see the last free slot.
+    await tx`SELECT pg_advisory_xact_lock(hashtext(${'rate:' + bucket}))`;
     await tx`DELETE FROM rate_hits WHERE bucket = ${bucket} AND at < now() - interval '1 hour'`;
     const [r] = await tx<{ n: number; oldest: Date | null }[]>`
       SELECT COUNT(*)::int AS n, MIN(at) AS oldest FROM rate_hits

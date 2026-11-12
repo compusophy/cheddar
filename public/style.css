@@ -180,3 +180,9 @@ a.cell { text-decoration: none; color: inherit; }
 /* the status line may need a second line on a phone (the asleep notice does). */
 .status { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .status:empty { display: none; }
+
+/* the receipt under a reply: what the ai paid for it. small, quiet, and a link to the payment. */
+.receipt { align-self: flex-start; margin: 4px 0 0 2px; font-size: 0.8em; line-height: 1.2; color: var(--dim); text-decoration: none; }
+.receipt + .msg { margin-top: var(--u); }
+a.receipt:hover, a.receipt:focus-visible { color: var(--gold); }
+a.receipt::after { content: ' ↗'; }

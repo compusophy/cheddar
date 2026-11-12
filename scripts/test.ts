@@ -154,6 +154,13 @@ async function main() {
   check('a grant that could not be given can be asked for again', await db.claimFaucet(gp));
   await db.unclaimFaucet(gp);
 
+  console.log('a rate limit counts one request at a time');
+  const bucket = 'rate-test-' + Date.now();
+  const tried = await Promise.all(Array.from({ length: 12 }, () => db.rateAllow(bucket, 5, 60)));
+  check('twelve at once against a limit of five: five get through', tried.filter((x) => x === 0).length === 5, JSON.stringify(tried));
+  check('the rest are told how long to wait', tried.filter((x) => x > 0).length === 7 && tried.every((x) => x <= 60));
+  await db.sql`DELETE FROM rate_hits WHERE bucket = ${bucket}`;
+
   console.log('one message at a time in a game');
   const tp = '0x00000000000000000000000000000000000000e1';
   await db.createSession('turn-test', 0, tp, null);

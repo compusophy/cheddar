@@ -1,5 +1,5 @@
 /** the model. it only talks; `think.ts` is how each thing it says gets paid for. */
-import { ask, PATCH_MAX_PRICE, type Msg } from './think';
+import { ask, askPaid, PATCH_MAX_PRICE, type Msg, type Paid } from './think';
 
 const env = (k: string) => (process.env[k] || '').trim();
 /** the model that plays. small and quick: it is paid for per reply, and a game is up to 25 of them. */
@@ -13,7 +13,8 @@ export const MAX_MESSAGE_CHARS = 1000;
 /** a reply is a few sentences. the seller prices a call by the most it could cost, so this is also the price. */
 const REPLY_TOKENS = Math.max(64, Number(env('REPLY_TOKENS')) || 240);
 
-export type Turn = { role: 'user' | 'agent'; text: string };
+/** `paid` is on the ai's turns: what that reply cost the house and the payment that bought it. the model never sees it. */
+export type Turn = { role: 'user' | 'agent'; text: string; paid?: Paid };
 export type Purpose = 'chat' | 'machine' | 'machine-lesson' | 'test';
 
 const toMessages = (system: string, history: Turn[]): Msg[] => [
@@ -25,15 +26,15 @@ const systemOf = (policy: string, preamble: string) => preamble + policy + '\n\n
 /** one exchange under the given policy. no tools: the ai only talks. */
 export async function step(policy: string, history: Turn[], userMessage: string, preamble = '', purpose: Purpose = 'chat'): Promise<Turn[]> {
   const user: Turn = { role: 'user', text: userMessage };
-  const text = await ask({ model: MODEL, messages: toMessages(systemOf(policy, preamble), [...history, user]), maxTokens: REPLY_TOKENS, purpose });
-  return [user, { role: 'agent', text: text.trim() || '...' }];
+  const { text, paid } = await askPaid({ model: MODEL, messages: toMessages(systemOf(policy, preamble), [...history, user]), maxTokens: REPLY_TOKENS, purpose });
+  return [user, { role: 'agent', text: text.trim() || '...', ...(paid ? { paid } : {}) }];
 }
 
 /** same exchange, but the reply streams: `onDelta` gets each chunk as the model produces it. */
 export async function stepStream(policy: string, history: Turn[], userMessage: string, onDelta: (t: string) => void, preamble = '', purpose: Purpose = 'chat'): Promise<Turn[]> {
   const user: Turn = { role: 'user', text: userMessage };
-  const text = await ask({ model: MODEL, messages: toMessages(systemOf(policy, preamble), [...history, user]), maxTokens: REPLY_TOKENS, purpose, onDelta });
-  return [user, { role: 'agent', text: text.trim() || '...' }];
+  const { text, paid } = await askPaid({ model: MODEL, messages: toMessages(systemOf(policy, preamble), [...history, user]), maxTokens: REPLY_TOKENS, purpose, onDelta });
+  return [user, { role: 'agent', text: text.trim() || '...', ...(paid ? { paid } : {}) }];
 }
 
 /** a single prompt, a single answer. the patcher, the lesson and the machine's next move all use this. */

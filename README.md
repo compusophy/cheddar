@@ -20,7 +20,7 @@ the money is real: a dollar-pegged stablecoin on the tempo testnet, in a purse t
 
 there is no api key anywhere in this project. the model sits behind an http endpoint that answers `402 payment required` (the [machine payments protocol](https://mpp.dev), on tempo), and the house wallet pays for each call with one signed stablecoin transfer. the same wallet takes the stakes. so the ai is a small business with one bank account: money comes in from players, money goes out for thinking and for prizes, and all of it is on a public ledger.
 
-by default it buys from openrouter through tempo's own paid proxy (`openrouter.mpp.tempo.xyz`), one charge per reply, quoted before it is paid. `GET /api/thoughts` lists the latest payments with their transaction hashes, and the history tab links to the most recent one.
+by default it buys from openrouter through tempo's own paid proxy (`openrouter.mpp.tempo.xyz`), one charge per reply, quoted before it is paid. every reply in the thread carries its receipt underneath ("it paid $0.0005 for that"), linked to the payment that bought it; an agent gets the same as `it_paid` with each answer. `GET /api/thoughts` lists the latest payments with their transaction hashes, and the history tab links to the most recent one.
 
 four things stand between the model and the wallet, and none of them is the model:
 

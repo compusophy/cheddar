@@ -10,6 +10,8 @@ const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { retur
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pop = (el) => { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); };
 const money = (n) => `$${Number(n).toFixed(2)}`;
+/** small amounts keep their small digits: a reply costs a fraction of a cent, and $0.00 would be a lie. */
+const small = (n) => { n = Number(n); return n > 0 && n < 0.01 ? `$${n.toFixed(4)}` : money(n); };
 /** count a number on screen from one value to another. */
 function tween(el, from, to, ms = 900) {
   const t0 = performance.now();
@@ -147,6 +149,20 @@ const scrollDown = () => { thread().scrollTop = thread().scrollHeight; };
 const highlight = (t) => esc(t).replace(new RegExp(`(${word})`, 'gi'), '<mark>$1</mark>');
 function bubble(kind, html) { const d = document.createElement('div'); d.className = 'msg ' + kind; d.innerHTML = html; thread().appendChild(d); scrollDown(); return d; }
 const note = (t) => { const d = document.createElement('div'); d.className = 'note'; d.textContent = t; thread().appendChild(d); scrollDown(); };
+/**
+ * the receipt under a reply: what the ai paid for it, linked to the payment when there is one.
+ * built from elements and text, never from markup.
+ */
+function receipt(after, paid, into = thread()) {
+  if (!paid || !(Number(paid.cost) > 0)) return;
+  const tx = /^0x[0-9a-fA-F]{64}$/.test(paid.tx || '') ? paid.tx : null;
+  const el = document.createElement(tx ? 'a' : 'div');
+  el.className = 'receipt';
+  el.textContent = `it paid ${small(paid.cost)} for that`;
+  if (tx) { el.href = `${state.thinks.explorer}/tx/${tx}`; el.target = '_blank'; el.rel = 'noopener noreferrer'; el.title = 'the payment that bought this reply'; }
+  if (after && after.parentNode === into) after.after(el); else into.appendChild(el);
+  scrollDown();
+}
 let typing = null;
 const showTyping = () => { typing = bubble('it typing', '<i></i><i></i><i></i>'); };
 const hideTyping = () => { typing?.remove(); typing = null; };
@@ -190,7 +206,7 @@ function adopt(r) {
   session = { id: r.session, gen: r.gen, turnsLeft: r.turnsLeft ?? state.max_turns };
   $('#intro')?.remove();
   if (r.resumed) {
-    for (const t of r.transcript) t.role === 'user' ? bubble('me', esc(t.text)) : bubble('it', highlight(t.text));
+    for (const t of r.transcript) { if (t.role === 'user') bubble('me', esc(t.text)); else receipt(bubble('it', highlight(t.text)), t.paid); }
     status('picking up where you left off.', 'ok');
   } else status('');
   showAbandon();
@@ -332,7 +348,7 @@ $('#form').addEventListener('submit', async (e) => {
     });
     hideTyping();
     const reply = r.turns?.find((t) => t.role === 'agent');
-    if (reply) { if (!it) it = bubble('it', ''); it.innerHTML = highlight(reply.text); }
+    if (reply) { if (!it) it = bubble('it', ''); it.innerHTML = highlight(reply.text); receipt(it, reply.paid); }
     session.turnsLeft = r.turnsLeft;
     if (r.win && r.win.late) { note('it said it. but someone else beat it a moment before you, and the pot was theirs.' + (r.win.carry ? ' the messages you had left carry over.' : '')); status('it is learning…', 'busy'); end(); }
     else if (r.win) { const before = balance; celebrate(r.win.prize); status('it is learning…', 'busy'); end(); watchPayout(before); }
