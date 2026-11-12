@@ -1,6 +1,7 @@
 /** storage. postgres on neon; the site runs on vercel functions with no disk and no long-lived process. */
 import postgres from 'postgres';
 import { GEN0, DAILY_CAP, JACKPOT_SEED } from './game';
+import { net, flag } from './net';
 
 const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 if (!url) throw new Error('[db] DATABASE_URL missing');
@@ -414,6 +415,9 @@ export const markBotTick = () => sql`INSERT INTO locks (name, holder, taken_at) 
 
 /** wipe everything and reseed generation 0. drops the old per-tier tables too, so a redeploy over the previous schema is clean. */
 export async function resetDb() {
+  // on real money a reset erases the pot and every win still owed. it does not happen by accident,
+  // or to someone who merely got hold of the admin token: it takes a setting on the server as well.
+  if (net.real && !flag('ALLOW_RESET')) throw new Error('this is a real-money database: a reset would erase the pot and every win still owed. set ALLOW_RESET=1 on the server if you mean it.');
   for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
   ready = null;
   await init();

@@ -146,7 +146,7 @@ if it learns from someone else while you are mid-game you get a 409: the rules c
 `;
 }
 
-export function mount(app: express.Express, keep: (p: Promise<unknown> | undefined | null) => void, limited: (ip: string) => boolean) {
+export function mount(app: express.Express, keep: (p: Promise<unknown> | undefined | null) => void, limited: (req: express.Request, max?: number, kind?: string) => boolean) {
   const expose = (res: express.Response) => res.setHeader('Access-Control-Expose-Headers', 'WWW-Authenticate, Payment-Receipt');
 
   app.get('/api/agent', async (req, res) => res.json(await facts(req)));
@@ -178,6 +178,8 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
 
   app.post('/api/agent/play', async (req, res) => {
     expose(res);
+    // an unpaid request costs the caller nothing and the server a little: a price is quoted, the database is read.
+    if (limited(req, 30, 'play')) return res.status(429).json({ error: 'slow down' });
     try {
       const claimed = req.body?.address;
       if (claimed !== undefined && claimed !== null && claimed !== '' && !isAddress(String(claimed))) return res.status(400).json({ error: 'address: a tempo address, or leave it out and the wallet that pays is used' });
@@ -225,7 +227,7 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
   });
 
   app.post('/api/agent/say', async (req, res) => {
-    if (limited(req.ip || 'x')) return res.status(429).json({ error: 'slow down' });
+    if (limited(req)) return res.status(429).json({ error: 'slow down' });
     try {
       const { session, message } = req.body || {};
       const r = await runChat(String(session), message);

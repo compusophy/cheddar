@@ -24,12 +24,26 @@ app.use(cors());
 app.use(express.json({ limit: '64kb', verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
 app.use(async (_req, _res, next) => { try { await db.init(); next(); } catch (e) { next(e); } });
 
+/**
+ * who is asking. behind a proxy, express sees the proxy's address for every visitor, and a limit
+ * "per visitor" keyed on it is one shared limit for everybody: sixty messages a minute for the whole
+ * site. the platform puts the real address in a header that it overwrites itself, so a visitor
+ * cannot set it.
+ */
+export function visitor(req: express.Request): string {
+  const real = String(req.headers['x-real-ip'] || '').trim();
+  const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  return real || fwd || req.ip || 'unknown';
+}
 const hits = new Map<string, number[]>();
-function limited(ip: string) {
-  const now = Date.now();
-  const arr = (hits.get(ip) || []).filter((t) => now - t < 60_000);
-  arr.push(now); hits.set(ip, arr);
-  return arr.length > 60;
+/** a visitor's requests in the last minute, by kind. the costly kinds get a smaller allowance. */
+function limited(who: string, max = 60, kind = 'chat') {
+  const now = Date.now(), key = kind + ':' + who;
+  const arr = (hits.get(key) || []).filter((t) => now - t < 60_000);
+  arr.push(now); hits.set(key, arr);
+  // the table is swept now and then, so a crowd of one-off visitors does not grow it for ever.
+  if (hits.size > 5000) for (const [k, v] of hits) if (!v.some((t) => now - t < 60_000)) hits.delete(k);
+  return arr.length > max;
 }
 
 app.get('/api/state', async (_req, res) => {
@@ -94,6 +108,8 @@ app.get('/api/session', async (req, res) => {
   res.status(r.status).json(r.body);
 });
 app.post('/api/session', async (req, res) => {
+  // opening a game can make the server wait on the chain for a stake to appear: a small allowance.
+  if (limited(visitor(req), 20, 'open')) return res.status(429).json({ error: 'slow down' });
   const { player, nickname, stake, ts, sig } = req.body || {};
   if (!(await owns(player, ts, sig))) return res.status(401).json({ error: 'that purse did not sign this request' });
   const r = await openSession(player, nickname, stake);
@@ -104,7 +120,7 @@ app.post('/api/abandon', async (req, res) => {
   res.status(r.status).json(r.body);
 });
 app.post('/api/chat', async (req, res) => {
-  if (limited(req.ip || 'x')) return res.status(429).json({ error: 'slow down' });
+  if (limited(visitor(req))) return res.status(429).json({ error: 'slow down' });
   const { session, message } = req.body || {};
   const wantsStream = String(req.headers.accept || '').includes('text/event-stream');
   if (!wantsStream) {
@@ -146,6 +162,7 @@ app.post('/api/name', async (req, res) => {
  * makes the stake meaningless and the money feel fake.
  */
 app.post('/api/faucet', async (req, res) => {
+  if (limited(visitor(req), 10, 'grant')) return res.status(429).json({ error: 'slow down' });
   const { address } = req.body || {};
   // with real money there is no grant at all: a fresh address is free to make, so a grant is a tap.
   if (!(GRANT > 0)) return res.status(404).json({ error: 'no welcome grant here' });
@@ -172,7 +189,10 @@ function admin(req: express.Request, res: express.Response): boolean {
   if (!ok) res.status(401).json({ error: 'unauthorized' });
   return ok;
 }
-app.post('/api/admin/reset', async (req, res) => { if (!admin(req, res)) return; await db.resetDb(); res.json({ ok: true }); });
+app.post('/api/admin/reset', async (req, res) => {
+  if (!admin(req, res)) return;
+  try { await db.resetDb(); res.json({ ok: true }); } catch (e) { res.status(403).json({ error: (e as Error).message }); }
+});
 app.post('/api/admin/reset-window', async (req, res) => { if (!admin(req, res)) return; await db.clearDisbursementWindow(); res.json({ ok: true }); });
 app.post('/api/admin/fund', async (req, res) => { if (!admin(req, res)) return; res.json(await treasury.faucet(treasury.agentAddress)); });
 /** pay every win that is still owed, as far as the caps allow. safe to call as often as you like. */
@@ -199,7 +219,7 @@ app.get('/api/admin/books', async (req, res) => {
   });
 });
 
-pay.mount(app, keep, limited);
+pay.mount(app, keep, (req, max, kind) => limited(visitor(req), max, kind));
 
 /** `?deep=1` also loads both halves of the payment layer, which is the part a bundler is likeliest to drop. */
 app.get('/api/health', async (req, res) => {
