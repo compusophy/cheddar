@@ -245,8 +245,8 @@ async function signStake() {
   return { hash: ethers.Transaction.from(raw).hash, raw };
 }
 const keptStake = () => { const hash = ls.get('pending'); return hash ? { hash, raw: ls.get('pendingRaw') } : null; };
-const keepStake = (s) => { ls.set('pending', s.hash); if (s.raw) ls.set('pendingRaw', s.raw); else ls.del('pendingRaw'); };
-const dropStake = () => { ls.del('pending'); ls.del('pendingRaw'); };
+const keepStake = (s) => { ls.set('pending', s.hash); if (s.raw) ls.set('pendingRaw', s.raw); else ls.del('pendingRaw'); ls.set('pendingAt', String(Date.now())); ls.set('pendingChain', String(state.chain)); };
+const dropStake = () => { ls.del('pending'); ls.del('pendingRaw'); ls.del('pendingAt'); ls.del('pendingChain'); };
 /** let go of the kept stake only when the server says it is the one this game was opened with. */
 function spent(r) { const p = ls.get('pending'); if (p && r?.stake && String(r.stake).toLowerCase() === p.toLowerCase()) dropStake(); }
 /**
@@ -293,13 +293,9 @@ async function openFor(s) {
     try { const r = await openSession(s.hash); spent(r); return r; }
     catch (e) {
       if (e.status === 400 || (e.status === 402 && !/not find the stake/i.test(e.message))) { dropStake(); throw e; }
-      if (e.status === 409) {
-        // already used. by the game this purse has open, if the answer to an earlier try was lost; or by one long over.
-        dropStake();
-        const r = await peek().catch(() => null);
-        if (r?.session) return r;
-        throw e;
-      }
+      // already used: by the game this purse has open, if the answer to an earlier try was lost, or by one long over.
+      // either way it is not this stake's to open any more. whoever called this looks again at what the purse has.
+      if (e.status === 409) { dropStake(); throw e; }
       if (e.status === 401) proofCache = null; // the purse's signed proof went stale while it waited: sign a new one
       const landed = e.status === 429 || e.status >= 500; // the game's trouble, not the stake's
       if (i >= 5) throw new Error(landed ? 'your stake is safe. the game could not take it just now: send again in a moment.' : 'your stake is safe. it has not shown up yet: send again in a moment.');
@@ -319,50 +315,79 @@ function adopt(r) {
   } else status('');
   showAbandon();
 }
-/** ask the server first. it either resumes the game you are in, or tells you to stake. */
+/**
+ * has a kept stake become something this chain will never show, and why? signed for another chain (the game
+ * moved networks, or this browser's storage outlived a test network), or ten minutes old with no
+ * trace of it on the chain. tempo includes a transfer within seconds or not at all, and the signed
+ * transfer exists only in this browser: once it is let go of here, nothing can send it. without
+ * this, a stake that could never land was picked back up on every message, waited on for two
+ * minutes, and never given up, and the purse could not start a game again.
+ */
+async function lost(s) {
+  const forChain = Number(ls.get('pendingChain')) || 0;
+  if (forChain && forChain !== Number(state.chain)) return 'elsewhere';
+  let at = Number(ls.get('pendingAt')) || 0;
+  if (!at) { at = Date.now(); ls.set('pendingAt', String(at)); } // kept by an older page, which did not note the time: its ten minutes start now
+  if (Date.now() - at < 10 * 60_000) return null;
+  try { return (await chain().getTransactionReceipt(s.hash)) ? null : 'never'; } catch { return null; } // the chain could not be asked: nothing is concluded
+}
+/** a game has been opened with a stake: show the pot it grew, and the purse it left. */
+function seated(r) {
+  if (r.jackpot != null) { tween($('#jackpot'), state.jackpot, r.jackpot, 700); pop($('#jackpot')); state.jackpot = r.jackpot; }
+  readBalance().then(() => paintBalance(false));
+  adopt(r);
+}
+/**
+ * ask the server first. it resumes the game you are in, or hands back the rest of one that was
+ * interrupted, or a stake is needed: one kept from earlier, or a new one.
+ *
+ * whenever a kept stake turns out to be gone (it opened a game that is over, or it never reached the
+ * chain) everything is asked again from the top before any money moves. there may be a game it had
+ * already opened, or the rest of an interrupted one waiting at no charge, and a new stake sent in
+ * the same breath would have paid for something that was free.
+ */
 async function ensureSession() {
   if (session) return;
-  let r = await peek();
-  if (r.session) {
-    // a game is open already. a stake this page is holding is let go of only if it is the one that
-    // opened it. any other (two tabs staked at once) is still this purse's money, and pays for the next game.
-    spent(r);
-    if (ls.get('pending')) note('you have a game open already. the stake you sent is kept: it pays for your next one.');
-  } else if (r.carry && !ls.get('pending')) {
-    // the rest of a game that was interrupted: opened without a stake.
-    r = await openSession(undefined);
-    carry = null; paintAgain();
-    if (r.carried) note(`this is the rest of the game it interrupted: ${r.turnsLeft} messages, no charge.`);
-  } else {
-    let s = keptStake(), opened = null;
+  for (let pass = 0; pass < 4; pass++) {
+    let r = await peek();
+    if (r.session) {
+      // a game is open already. a stake this page is holding is let go of only if it is the one that
+      // opened it. any other (two tabs staked at once) is still this purse's money, and pays for the next game.
+      spent(r);
+      if (ls.get('pending')) note('you have a game open already. the stake you sent is kept: it pays for your next one.');
+      return adopt(r);
+    }
+    let s = keptStake();
+    if (!s && r.carry) {
+      // the rest of a game that was interrupted: opened without a stake.
+      r = await openSession(undefined);
+      carry = null; paintAgain();
+      if (r.carried) note(`this is the rest of the game it interrupted: ${r.turnsLeft} messages, no charge.`);
+      return adopt(r);
+    }
     if (s) {
       status('picking your stake back up…', 'busy');
-      if (!(await sendStake(s))) { dropStake(); s = null; } // it never left the purse, and now never can: this game needs a new one
+      const gone = (await lost(s)) || ((await sendStake(s)) ? null : 'never');
+      if (gone) { dropStake(); note(gone === 'elsewhere' ? 'a stake kept here was made on another network. it cannot open a game on this one.' : 'a stake from earlier never reached the chain, so nothing was taken for it.'); continue; }
+      try { r = await openFor(s); }
+      catch (e) { if (e.status === 409 && !ls.get('pending')) continue; throw e; } // it was spent on a game that is over: look again
+      return seated(r);
     }
-    if (s) {
-      try { opened = await openFor(s); }
-      catch (e) { if (e.status === 409 && !ls.get('pending')) s = null; else throw e; } // spent on a game that is over
+    if (state.closed) throw new Error('closed for now. nothing was charged.');
+    if (state.awake === false) throw new Error(asleepLine());
+    if (balance < needed()) await fillIfEmpty();
+    if (balance < needed()) {
+      if (state.real) openPurse();
+      throw new Error(state.real ? `add money to play: a game is ${money(state.stake)}.` : dry || 'your purse is empty.');
     }
-    if (!s) {
-      if (state.closed) throw new Error('closed for now. nothing was charged.');
-      if (state.awake === false) throw new Error(asleepLine());
-      if (balance < needed()) await fillIfEmpty();
-      if (balance < needed()) {
-        if (state.real) openPurse();
-        throw new Error(state.real ? `add money to play: a game is ${money(state.stake)}.` : dry || 'your purse is empty.');
-      }
-      status(`putting ${money(state.stake)} in the pot…`, 'busy');
-      try { s = await signStake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
-      keepStake(s); // written down before it is sent anywhere
-      await sendStake(s);
-      status('confirming…', 'busy');
-      opened = await openFor(s);
-    }
-    r = opened;
-    if (r.jackpot != null) { tween($('#jackpot'), state.jackpot, r.jackpot, 700); pop($('#jackpot')); state.jackpot = r.jackpot; }
-    readBalance().then(() => paintBalance(false));
+    status(`putting ${money(state.stake)} in the pot…`, 'busy');
+    try { s = await signStake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
+    keepStake(s); // written down before it is sent anywhere
+    await sendStake(s);
+    status('confirming…', 'busy');
+    return seated(await openFor(s));
   }
-  adopt(r);
+  throw new Error('could not start a game just now. nothing new was charged: send again in a moment.');
 }
 /** on load: if there is a game open, the thread is waiting for you. */
 async function resumeIfOpen() {

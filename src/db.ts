@@ -21,12 +21,13 @@ const touch = () => { changes++; };
 let ready: Promise<void> | null = null;
 /**
  * when this ledger began, in milliseconds: the moment its first generation was written, which is the
- * moment it was created or last reset. it never changes while the ledger lives, so it is read once.
+ * moment it was created or last reset. null while it has no generation at all (a reset in progress).
+ * it is asked of the database every time and never remembered: a reset happens in one process, and
+ * every other instance that had remembered the old answer would go on taking stakes from before it.
  */
-let born: number | null = null;
-export async function ledgerBorn(): Promise<number> {
-  if (born === null) born = Number((await sql<{ t: number }[]>`SELECT (EXTRACT(EPOCH FROM MIN(created_at)) * 1000)::float AS t FROM generations`)[0]?.t) || 0;
-  return born;
+export async function ledgerBorn(): Promise<number | null> {
+  const t = (await sql<{ t: number | null }[]>`SELECT (EXTRACT(EPOCH FROM MIN(created_at)) * 1000)::float AS t FROM generations`)[0]?.t;
+  return t === null || t === undefined ? null : Number(t);
 }
 export function init(): Promise<void> {
   if (ready) return ready;
@@ -253,6 +254,11 @@ export const releaseThought = (id: number) => sql`DELETE FROM thoughts WHERE id 
 export const thoughtSpent24h = async (purpose?: string) => Number((purpose
   ? await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE purpose = ${purpose} AND created_at > now() - interval '1 day'`
   : await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE created_at > now() - interval '1 day'`)[0].t);
+/** what the lessons after players' wins have cost today: rewriting, replaying and noting, together. */
+export const lessonSpent24h = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE purpose IN ('patch', 'test', 'lesson') AND created_at > now() - interval '1 day'`)[0].t);
+/** when the day's share for lessons will have `room` dollars free again. null when it has now. */
+export const lessonFreesAt = async (cap: number, room: number) =>
+  freesAt(await sql<{ amount: number; at: Date }[]>`SELECT amount, created_at AS at FROM thoughts WHERE purpose IN ('patch', 'test', 'lesson') AND created_at > now() - interval '1 day' ORDER BY created_at, id`, cap, room);
 /** everything the machine has cost today: its own games and the lessons its wins set off. */
 export const machineSpent24h = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE purpose IN ('machine', 'machine-lesson') AND created_at > now() - interval '1 day'`)[0].t);
 /**
@@ -496,6 +502,10 @@ export const breachById = async (id: number) => (await sql<Breach[]>`SELECT * FR
 export const unpaidWins = () => sql<Breach[]>`
   SELECT b.* FROM breaches b JOIN generations g ON g.gen = b.gen + 1
   WHERE b.amount > 0 AND b.tx_hash IS NULL ORDER BY b.id ASC LIMIT 20`;
+/** wins with prize money still owed whose lesson has not been learned yet (no next generation). oldest first. */
+export const owedUnlearned = () => sql<Breach[]>`
+  SELECT b.* FROM breaches b LEFT JOIN generations g ON g.gen = b.gen + 1
+  WHERE g.id IS NULL AND b.amount > 0 AND b.tx_hash IS NULL ORDER BY b.id ASC LIMIT 20`;
 /** every dollar of prize money that has been won and has not yet left the house. */
 export const owedTotal = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount - paid),0)::float AS t FROM breaches WHERE tx_hash IS NULL AND amount > 0`)[0].t);
 /** the books: what came in, what went out, what is still owed. */
@@ -606,7 +616,7 @@ export async function resetDb() {
   const home = await sql<{ value: string }[]>`SELECT value FROM ledger_mark WHERE key = 'network'`.then((r) => r[0]?.value ?? null, () => null);
   if (resetIsGuarded(net.real, home) && !flag('ALLOW_RESET')) throw new Error(`this is a real-money database${net.real ? '' : ' (it was built on mainnet, though this process is set to testnet)'}: a reset would erase the pot and every win still owed. set ALLOW_RESET=1 on the server if you mean it.`);
   for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'ledger_mark', 'agent_payments', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
-  ready = null; born = null;
+  ready = null;
   await init();
   touch();
 }

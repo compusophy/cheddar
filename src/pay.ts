@@ -20,7 +20,7 @@ import * as treasury from './treasury';
 import * as think from './think';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 import { WORD, STAKE, JACKPOT_SHARE } from './game';
-import { openPaidSession, runChat, carryOn } from './chat';
+import { openPaidSession, runChat, carryOn, playable } from './chat';
 import { net, flag } from './net';
 
 const chain = net.real ? tempoMainnet : tempoModerato;
@@ -133,7 +133,7 @@ async function reply(res: express.Response, r: Response) {
 }
 
 async function facts(req: express.Request) {
-  const [gen, pot, up] = await Promise.all([db.currentGeneration(), db.jackpot(), think.awake()]);
+  const [gen, pot, up] = await Promise.all([db.currentGeneration(), db.jackpot(), playable()]);
   const base = origin(req);
   return {
     game: 'say cheese',
@@ -279,7 +279,7 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       // moved, so the game is theirs, exactly as a stake that has left a purse always becomes a game.
       const moved = movedAlready(Credential, request);
       if (elsewhere && !moved) return res.status(400).json({ error: '"address" is not taken: a game is played by, and its prize paid to, the wallet that pays for it. leave it out. nothing was charged.' });
-      const [up, learning] = await Promise.all([think.awake(), db.lockSince('harden')]);
+      const [up, learning] = await Promise.all([playable(), db.lockSince('harden')]);
       if (!moved && !up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true, ...(up.wakesIn ? { retry_after: up.wakesIn } : {}) });
       if (!moved && learning) return res.status(503).json({ error: 'it is learning from a win. nothing was charged. try again in a minute.', retry_after: 30 });
       // a game the ai's learning cut short: its session id buys back the messages that were left. no charge.

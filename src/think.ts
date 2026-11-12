@@ -86,7 +86,12 @@ export const describe = () => ({ url: new URL(THINK_URL).host, network: thinkNet
 
 /** it could not pay. the caller tells the player nothing was used up. */
 export class Broke extends Error {
-  /** `shareOnly`: what ran out is one kind of thinking's share of the day (lessons, or the machine). the house can still pay for a reply. */
+  /**
+   * `shareOnly`: what ran out is one kind of thinking's share of the day (lessons, or the machine),
+   * and nothing else is wrong: the house can still pay for a reply. it is set for that one reason
+   * and no other. a payment that failed, a seller that did not answer or a balance that could not
+   * be read is not "the money ran out", and must not be mistaken for it.
+   */
   constructor(why: string, readonly shareOnly = false) { super(why); this.name = 'Broke'; }
 }
 
@@ -177,6 +182,24 @@ export async function awake(fresh = false): Promise<Awake> {
   return value;
 }
 
+/**
+ * can the house afford to learn from a loss right now? a lesson is not started on less than this:
+ * one that runs out of money part-way has paid for work it throws away. it needs that much room in
+ * the day's share for lessons, and that much money that is free to think with.
+ */
+export const LESSON_NEED = Math.min(num('LESSON_NEED', 0.5), LESSON_DAILY_CAP);
+export async function canLearn(): Promise<{ ok: boolean; why: string | null; wakesIn?: number }> {
+  const spent = await db.lessonSpent24h();
+  if (spent + LESSON_NEED > LESSON_DAILY_CAP + 1e-9) {
+    const at = await db.lessonFreesAt(LESSON_DAILY_CAP, LESSON_NEED).catch(() => null);
+    return { ok: false, why: "it lost, and today's money for lessons is spent", ...(at ? { wakesIn: Math.max(1, Math.ceil((at.getTime() - Date.now()) / 1000)) } : {}) };
+  }
+  if (API_KEY) return { ok: true, why: null };
+  const m = await spendable();
+  if (m.available + 1e-9 < LESSON_NEED) return { ok: false, why: `it lost, and has less than the $${LESSON_NEED.toFixed(2)} it needs free to learn from it` };
+  return { ok: true, why: null };
+}
+
 export type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
 export type Ask = {
   model: string;
@@ -234,9 +257,10 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
   // over. a dear thought (the rule rewrite after a loss) can cost more than the floor, and paying
   // it then would come out of the pot or a prize still owed. it is checked against what is free.
   if (price > FLOOR) {
-    const m = await spendable();
-    if (price > m.available + 1e-9) { last = null; throw new Broke(`a thought at $${price} is more than the $${m.available} that is free to think with`); }
-    last = null; // and what is free is about to change by more than a rounding: look again next time
+    const m = await spendable().catch(() => null);
+    last = null; // what is free is about to change by more than a rounding, or could not be read: look again next time
+    if (!m) throw new Broke('cannot check what is free to think with right now');
+    if (price > m.available + 1e-9) throw new Broke(`a thought at $${price} is more than the $${m.available} that is free to think with`);
   }
   const rsv = await db.reserveThought(a.purpose, a.model, price, THINK_DAILY_CAP, shareOf(a.purpose));
   if (!rsv.ok) throw new Broke(rsv.why, rsv.share === true);

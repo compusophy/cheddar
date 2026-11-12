@@ -228,7 +228,7 @@ async function main() {
   check('one handed back: one more is let through, and only one', (await db.rateAllow(relB, 2, 86400)) === 0 && (await db.rateAllow(relB, 2, 86400)) > 0);
   await db.sql`DELETE FROM rate_hits WHERE bucket = ${relB}`;
   const began = await db.ledgerBorn();
-  check('the ledger knows when it began', began > 1_600_000_000_000 && began <= Date.now() + 5000, String(began));
+  check('the ledger knows when it began', began !== null && began > 1_600_000_000_000 && began <= Date.now() + 5000, String(began));
 
   console.log('two allowances are taken together or not at all');
   const mineB = 'rate-mine-' + Date.now(), allB = 'rate-all-' + Date.now();

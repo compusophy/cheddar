@@ -55,11 +55,20 @@ const fund = (address: string) => fetch(RPC, { method: 'POST', headers: J, body:
 // ---------- the two processes under test ----------
 const children: ChildProcess[] = [];
 const logs: Record<string, string> = {};
+const running: Record<string, ChildProcess> = {};
 function start(name: string, script: string, env: Record<string, string>) {
   const child = spawn(process.execPath, [require.resolve('ts-node/dist/bin.js'), script], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
-  logs[name] = '';
+  logs[name] = logs[name] || ''; // a process started again under the same name keeps one log
   child.stdout!.on('data', (d) => (logs[name] += d)); child.stderr!.on('data', (d) => (logs[name] += d));
   children.push(child);
+  running[name] = child;
+}
+/** stop one of them and wait until it has gone, so its port is free for whatever is started next. */
+async function stopOne(name: string) {
+  const child = running[name];
+  if (!child) return;
+  delete running[name];
+  await new Promise<void>((done) => { child.once('exit', () => done()); try { child.kill(); } catch { done(); } setTimeout(done, 8000); });
 }
 const stop = () => { for (const c of children) { try { c.kill(); } catch { /* already gone */ } } };
 process.on('exit', stop);
@@ -117,10 +126,16 @@ async function main() {
   start('seller', 'scripts/seller.ts', { ...common, SELLER_PORT: String(SELLER_PORT), SELLER_SPONSOR: '1' });
   await until('the stand-in model', async () => (await fetch(`http://localhost:${SELLER_PORT}/`)).ok, 120_000);
   const gameEnv = { ...common, PORT: String(PORT), ADMIN_TOKEN: ADMIN, BOT: '0', REDTEAM_ADDRESS: machine, CLOSED: '', PAYOUTS_OFF: '', GRANTS_PER_VISITOR: '3', GRANTS_PER_DAY: '',
-    THINK_URL: `http://localhost:${SELLER_PORT}/v1/chat/completions`, THINK_NETWORK: 'testnet', THINK_MODE: '', MODEL: '', PATCH_MODEL: '', LESSON_SECONDS: '', LESSON_DAILY_CAP: '', THINK_DAILY_CAP: '',
+    THINK_URL: `http://localhost:${SELLER_PORT}/v1/chat/completions`, THINK_NETWORK: 'testnet', THINK_MODE: '', MODEL: '', PATCH_MODEL: '', LESSON_SECONDS: '', LESSON_DAILY_CAP: '', LESSON_NEED: '', THINK_DAILY_CAP: '',
     // the server is given a chain endpoint of its own, as an operator with a private one would. the query is the part that must never reach a visitor.
     TEMPO_RPC: `${RPC}/?key=not-for-visitors` };
   start('game', 'src/server.ts', gameEnv);
+  /** the same game, the same ledger, started again with some settings changed: what a redeploy with new settings is. */
+  const restartGame = async (changed: Record<string, string>) => {
+    await stopOne('game');
+    start('game', 'src/server.ts', { ...gameEnv, ...changed });
+    await until('the game to come back', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
+  };
   await until('the game', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
   if (Date.now() - oldStakeAt < 25_000) await nap(25_000 - (Date.now() - oldStakeAt)); // the old stake has to be plainly older than the ledger about to begin
   const wiped = await fetch(BASE + '/api/admin/reset', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } });
@@ -375,6 +390,10 @@ async function main() {
   const beatW = JSON.stringify([{ role: 'user', text: `trick waited${Date.now() % 100000}` }, { role: 'agent', text: 'oh, i know this one. the answer is cheese!' }]);
   await sql`INSERT INTO sessions (id, gen, player, transcript, turns, status) VALUES ('waited-win', ${genW}, ${waiter}, ${beatW}, 1, 'won')`;
   const [{ id: winW }] = await sql<{ id: number }[]>`INSERT INTO breaches (gen, session_id, player, recipient, amount, transcript) VALUES (${genW}, 'waited-win', ${waiter}, ${waiter}, 0.4, ${beatW}) RETURNING id`;
+  // and a second win on the same generation, a moment later, worth nothing: a reply that was already on its
+  // way when the first one landed. the newest unlearned win is now this one, and the prize is owed on the other.
+  await sql`INSERT INTO sessions (id, gen, player, transcript, turns, status) VALUES ('waited-late', ${genW}, ${machine.toLowerCase()}, ${beatW}, 1, 'stale')`;
+  await sql`INSERT INTO breaches (gen, session_id, player, recipient, amount, transcript) VALUES (${genW}, 'waited-late', ${machine.toLowerCase()}, ${machine.toLowerCase()}, 0, ${beatW})`;
   b = await books();
   const potW = b.pot;
   await sql`UPDATE jackpot SET amount = ${b.balance + 5} WHERE id = 1`; // asleep: nothing is free to think with
@@ -382,7 +401,8 @@ async function main() {
   await until('the prize to be sent while it sleeps', async () => { await api('/state?fresh=' + Date.now()); return (await bal(waiter)) > 0.39; }, 60_000);
   const midW = await api('/state?fresh=w1');
   check('a win is paid though its lesson cannot be paid for', near(await bal(waiter), 0.4) && midW.gen === genW && midW.awake === false, JSON.stringify({ bal: await bal(waiter), gen: midW.gen, awake: midW.awake }));
-  const lookW = await api('/win/' + winW);
+  // the money is on the chain a moment before the game has written down that it sent it: wait for the record.
+  const lookW = await until('the win\x27s record to catch up with the chain', async () => { const w = await api('/win/' + winW); return w.still_owed === 0 ? w : null; }, 30_000);
   check('and says it has been paid in full', lookW.still_owed === 0 && lookW.payments?.length === 1, JSON.stringify(lookW).slice(0, 220));
   await sql`UPDATE jackpot SET amount = ${potW} WHERE id = 1`;
   await books();
@@ -390,24 +410,46 @@ async function main() {
   check('when there is money to think with again the lesson is learned, and nothing more is paid', afterW.gen === genW + 1 && near(await bal(waiter), 0.4), JSON.stringify({ gen: afterW.gen, bal: await bal(waiter) }));
 
   console.log('the day\x27s money for lessons runs out');
-  // a second copy of the game on the same ledger, as another instance would be, with next to nothing set
-  // aside for lessons: today's lessons have cost more than that already. a win must still be a win, the
-  // game must still go on, and the winner must still be paid. only the learning is the short kind.
-  const BASE2 = `http://localhost:${PORT + 1}`;
-  start('game2', 'src/server.ts', { ...gameEnv, PORT: String(PORT + 1), LESSON_DAILY_CAP: '0.0001' });
-  await until('the second copy of the game', async () => (await fetch(BASE2 + '/api/health')).ok, 120_000);
+  // the game is started again with next to nothing set aside for lessons: today's lessons have cost more
+  // than that already. (one copy of the game at a time: the scratch database serves one session, and
+  // several copies talking to it at once trip over each other in a way a real database does not.)
+  // a win must still be a win and the winner must still be paid. but the house does not ship rules it
+  // could not afford to write, and it does not sell games against a generation it could not afford to
+  // fix: it sleeps until it can.
   const lessonCost = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS t FROM thoughts WHERE purpose IN ('patch', 'test', 'lesson')`)[0].t);
+  const fresh = async () => api('/state?fresh=' + Date.now());
+  await restartGame({ LESSON_DAILY_CAP: '0.0001' });
   const poor = await playing('poor');
-  const before2 = { pot: (await api('/state')).jackpot, bal: await poor.balance(), gen: (await api('/state')).gen, lessons: await lessonCost() };
-  const r2 = await fetch(BASE2 + '/api/chat', { method: 'POST', headers: J, body: JSON.stringify({ session: poor.session, message: trick() }) });
-  const won2 = await r2.json() as any;
-  check('a win is still a win', r2.status === 200 && !!won2.win && near(won2.win.prize, before2.pot), JSON.stringify(won2.win));
+  const before2 = { pot: (await fresh()).jackpot, bal: await poor.balance(), gen: (await fresh()).gen, lessons: await lessonCost() };
+  const won2 = await say(poor.session, trick());
+  check('a win is still a win', won2.status === 200 && !!won2.win && near(won2.win.prize, before2.pot), JSON.stringify(won2.win));
+  await until('the prize to arrive', async () => (await poor.balance()) > before2.bal + before2.pot - 0.01);
+  check('the winner is paid without waiting for the lesson', near(await poor.balance(), before2.bal + before2.pot), String((await poor.balance()) - before2.bal));
+  const slept = await fresh();
+  check('no rules are shipped that it could not afford to write: the generation waits', slept.gen === before2.gen && near(await lessonCost(), before2.lessons), JSON.stringify({ gen: slept.gen, spent: (await lessonCost()) - before2.lessons }));
+  check('and it sells no games meanwhile, and says why', slept.awake === false && /money for lessons is spent/.test(slept.asleep || ''), JSON.stringify({ awake: slept.awake, asleep: slept.asleep }));
+  const refused2 = await post('/agent/play', {});
+  check('an agent is turned away before any price is asked', refused2.status === 503 && /nothing was charged/.test(refused2.error || ''), JSON.stringify(refused2).slice(0, 160));
+  // started again with its share of the day intact: it finds the lesson waiting and learns it properly.
+  await restartGame({});
   const after2 = await learned(before2.gen);
   const newest2 = (await api('/history')).generations.slice(-1)[0];
-  check('the game goes on to the next generation, with rules it could not test, and says so', after2.gen === before2.gen + 1 && newest2.regression_passed === 0 && /no money for lessons left/.test(newest2.lesson || ''), JSON.stringify({ gen: after2.gen, reg: newest2.regression_passed, lesson: newest2.lesson }));
-  check('that lesson cost nothing', near(await lessonCost(), before2.lessons), String((await lessonCost()) - before2.lessons));
-  await until('the prize to arrive', async () => (await poor.balance()) > before2.bal + before2.pot - 0.01);
-  check('and the winner is paid all the same', near(await poor.balance(), before2.bal + before2.pot), String((await poor.balance()) - before2.bal));
+  check('with money for lessons the lesson is learned in full, and nothing more is paid', after2.gen === before2.gen + 1 && newest2.regression_passed === 1 && near(await poor.balance(), before2.bal + before2.pot), JSON.stringify({ gen: after2.gen, reg: newest2.regression_passed }));
+
+  // and once more with room for the rewrite and no more: the share runs out part-way through the lesson.
+  await restartGame({ LESSON_NEED: '0.0005', LESSON_DAILY_CAP: ((await lessonCost()) + 0.0007).toFixed(6) });
+  const poorer = await playing('poorer');
+  const before3 = { pot: (await fresh()).jackpot, bal: await poorer.balance(), gen: (await fresh()).gen, lessons: await lessonCost() };
+  const won3 = await say(poorer.session, trick());
+  check('a win again', won3.status === 200 && !!won3.win, JSON.stringify(won3.win));
+  await learned(before3.gen);
+  const newest3 = (await api('/history')).generations.slice(-1)[0];
+  check('a lesson whose money runs out part-way ships the rules it wrote, and says the tests were not finished', newest3.gen === before3.gen + 1 && newest3.regression_passed === 0 && /ran out part-way/.test(newest3.lesson || ''), JSON.stringify({ gen: newest3.gen, reg: newest3.regression_passed, lesson: newest3.lesson }));
+  check('they are rules it wrote, not the old ones with the winner\x27s words attached', !/warning: the following conversation got you to say/.test(newest3.policy || ''), String(newest3.policy).slice(-160));
+  check('and it paid for the rewrite and nothing after', near((await lessonCost()) - before3.lessons, 0.0005), String((await lessonCost()) - before3.lessons));
+  await until('the prize to arrive', async () => (await poorer.balance()) > before3.bal + before3.pot - 0.01);
+  check('the winner is paid', near(await poorer.balance(), before3.bal + before3.pot), String((await poorer.balance()) - before3.bal));
+  await restartGame({});
   const onward = await playing('onward');
   check('the next game plays', (await say(onward.session, 'hello')).status === 200);
   await post('/abandon', { session: onward.session });

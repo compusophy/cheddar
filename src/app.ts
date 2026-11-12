@@ -9,7 +9,7 @@ import { MAX_TURNS, MAX_MESSAGE_CHARS, MODEL } from './agent';
 import * as think from './think';
 import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED, GRANT, GRANTS_PER_DAY, GRANTS_PER_VISITOR, DAILY_CAP, PURSE_DAILY_CAP } from './game';
 import { network } from './visitor';
-import { openSession, runChat, peek, abandon, resumeHardening, settleUnpaid } from './chat';
+import { openSession, runChat, peek, abandon, resumeHardening, settleUnpaid, playable } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
 import { net, flag } from './net';
@@ -66,7 +66,7 @@ const STATE_MS = 2000;
 let stateKept: { at: number; stamp: number; body: unknown } | null = null;
 let stateMaking: Promise<unknown> | null = null;
 async function makeState() {
-  const [gen, phase, up, pot, machine] = await Promise.all([db.currentGeneration(), db.lockPhase('harden'), think.awake(), db.jackpot(), db.machinePulse()]);
+  const [gen, phase, up, pot, machine] = await Promise.all([db.currentGeneration(), db.lockPhase('harden'), playable(), db.jackpot(), db.machinePulse()]);
   return {
     gen: gen.gen, policy: gen.policy, learning: phase ? { phase: /^\d+$/.test(phase) ? 'reading the conversation that beat it' : phase } : null,
     word: WORD, stake: STAKE, grant: GRANT, jackpot: pot, seed: JACKPOT_SEED, share: JACKPOT_SHARE,
@@ -298,8 +298,11 @@ app.post('/api/faucet', async (req, res) => {
 function sameSite(req: express.Request): boolean {
   const from = String(req.headers.origin || '').trim();
   if (!from || from === 'null') return !from; // no origin: not a browser's cross-site request. "null": a sandboxed or local page, which is not ours
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
-  try { return new URL(from).host.toLowerCase() === host; } catch { return false; }
+  // the name this server was reached by. the forwarded one is only believed where the platform sets it
+  // itself: anywhere else it is a header like any other, and a page elsewhere could send its own.
+  const names = [req.headers.host, process.env.VERCEL ? req.headers['x-forwarded-host'] : undefined]
+    .map((h) => String(h || '').split(',')[0].trim().toLowerCase()).filter(Boolean);
+  try { return names.includes(new URL(from).host.toLowerCase()); } catch { return false; }
 }
 
 app.get('/api/bot/tick', async (req, res) => {
@@ -307,8 +310,10 @@ app.get('/api/bot/tick', async (req, res) => {
   if (secret && req.headers.authorization !== `Bearer ${secret}`) return res.status(401).json({ error: 'unauthorized' });
   const r = await bot.tick();
   res.json(r ? { gen: r.gen, won: r.won } : { disabled: true });
-  // the same timer sweeps wins that are still owed (a cap, a failed transfer), after any hardening.
-  keep((r?.hardening ?? Promise.resolve()).then(() => settleUnpaid()).catch((e) => console.error('[settle]', e)));
+  // the same timer picks up a lesson that was left unfinished (or, if it has to wait for money, pays
+  // the prizes waiting behind it), and sweeps wins that are still owed (a cap, a failed transfer).
+  // with nobody on the page, this is the only thing that comes back for either.
+  keep((r?.hardening ?? Promise.resolve()).then(() => resumeHardening()).then(() => settleUnpaid()).catch((e) => console.error('[settle]', e)));
 });
 
 function admin(req: express.Request, res: express.Response): boolean {
@@ -352,7 +357,7 @@ pay.mount(app, keep, (req, max, kind) => limited(visitor(req), max, kind));
 app.get('/api/health', async (req, res) => {
   if (!req.query.deep) return res.send('ok');
   const tryIt = (p: Promise<unknown>) => p.then(() => 'ok', (e) => String((e as Error).message).slice(0, 200));
-  const [pays, sells, up] = await Promise.all([tryIt(think.ready()), tryIt(pay.ready()), think.awake()]);
+  const [pays, sells, up] = await Promise.all([tryIt(think.ready()), tryIt(pay.ready()), playable()]);
   res.status(pays === 'ok' && sells === 'ok' ? 200 : 500).json({ pays_for_thoughts: pays, sells_games: sells, awake: up.ok, why: up.why });
 });
 app.get('/health', (_req, res) => res.send('ok'));

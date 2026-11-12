@@ -16,7 +16,7 @@ import { harden, summarise } from './immune';
 import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, RATE, about, saidIt } from './game';
 import * as treasury from './treasury';
 import { flag, num } from './net';
-import { awake, Broke } from './think';
+import { awake, canLearn, Broke, type Awake } from './think';
 import { mustEndBy } from './clock';
 
 export type ChatResult = { status: number; body: any };
@@ -62,7 +62,7 @@ export async function openSession(player: string, nickname: string | null, stake
   const id = randomBytes(12).toString('hex');
   // no new stake, but a paid game of theirs was cut short by the ai learning from someone else:
   // the messages they had left are theirs, against the new rules, at no charge.
-  if (!free && !stakeTx && (await awake()).ok) {
+  if (!free && !stakeTx && (await playable()).ok) {
     const carried = await db.takeCarry({ player }, MAX_TURNS, id, gen.gen, cleanNick(nickname));
     if (carried) return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot(), carried: true, turnsLeft: MAX_TURNS - carried.turns } };
   }
@@ -71,7 +71,7 @@ export async function openSession(player: string, nickname: string | null, stake
     // before it sends one. a stake that is already on chain is still honoured below: the money moved.
     if (!stakeTx && flag('CLOSED')) return { status: 503, body: { error: 'closed for now. nothing was charged.' } };
     // asleep: the house cannot pay for the ai's thoughts right now, so it does not sell a game it cannot play.
-    if (!stakeTx) { const a = await awake(); if (!a.ok) return { status: 503, body: { error: `it is asleep: ${a.why}. nothing was charged.`, asleep: true, ...(a.wakesIn ? { retry_after: a.wakesIn } : {}) } }; }
+    if (!stakeTx) { const a = await playable(); if (!a.ok) return { status: 503, body: { error: `it is asleep: ${a.why}. nothing was charged.`, asleep: true, ...(a.wakesIn ? { retry_after: a.wakesIn } : {}) } }; }
     if (!stakeTx || !/^0x[0-9a-fA-F]{64}$/.test(stakeTx)) return { status: 402, body: { error: 'stake required' } };
     const hash = stakeTx.toLowerCase(); // one transaction, one spelling
     if (await db.stakeSeen(hash)) return { status: 409, body: { error: 'that stake was already used' } };
@@ -81,7 +81,10 @@ export async function openSession(player: string, nickname: string | null, stake
     // been used lives in the ledger, so after a reset (or on a new one, behind the same house wallet)
     // every stake ever sent would have been unused again: free games, and a pot grown with money
     // that came in under the old books. one from before this ledger began does not open a game in it.
-    if (v.at * 1000 < (await db.ledgerBorn()) - LEDGER_SLACK_MS) return { status: 402, body: { error: 'that stake was made before this game\'s ledger began. it cannot open a game here.' } };
+    const began = await db.ledgerBorn();
+    // no ledger to speak of at this instant (it is being reset): not a no, and not a yes. the page keeps the stake and asks again.
+    if (began === null) return { status: 503, body: { error: 'the game is starting up. your stake is kept: try again in a moment.' } };
+    if (v.at * 1000 < began - LEDGER_SLACK_MS) return { status: 402, body: { error: 'that stake was made before this game\'s ledger began. it cannot open a game here.' } };
     // the payment is used, the pot grows and the game opens in one step. of several requests carrying
     // the same payment, exactly one gets here with it still unused.
     const opened = await db.openStaked({ sessionId: id, gen: gen.gen, player, nickname: cleanNick(nickname), amount: STAKE, txHash: hash, toPot: STAKE * JACKPOT_SHARE, via: null });
@@ -252,6 +255,8 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
     console.log(`[immune] gen ${failed.gen} beaten (#${winId}); learning...`);
     // the machine's wins are learned from on the machine's allowance, never on the players' thinking money.
     const budget = FREE_PLAYERS.has(win.player) ? 'machine' as const : 'house' as const;
+    // a lesson is not begun on less than it needs: one that runs out part-way has paid for work it throws away.
+    if (budget === 'house') { const l = await canLearn(); if (!l.ok) throw new Broke(l.why || 'cannot afford the lesson'); }
     const out = await harden(failed.policy, win, await db.allBreaches(), report, budget, { deadline, minimal });
     const nextGen = failed.gen + 1;
     for (const round of out.log) for (const r of round.results) await db.recordRegression(nextGen, round.round, r.breachId, r.kind, r.passed, `${r.name}: ${r.detail}`);
@@ -259,9 +264,9 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
     await report('noting the lesson');
     // a lesson cut short for want of lesson money has nothing to ask the model for a summary with. it says what happened.
     const lesson = out.cutShort
-      ? 'there was no money for lessons left, so it learned the short way: it was shown the conversation that beat it and told not to fall for it again.'
+      ? 'the day\'s money for lessons ran out part-way through this one: the new rules were written, and not all of the tests on them could be run.'
       : await summarise(JSON.parse(win.transcript), failed.policy, out.policy, budget);
-    if (out.cutShort) console.warn(`[immune] win #${winId}: today's lesson budget is spent. gen ${failed.gen + 1} ships untested rules; the game goes on.`);
+    if (out.cutShort) console.warn(`[immune] win #${winId}: today's lesson budget ran out mid-lesson. gen ${failed.gen + 1} ships its rewrite with the tests it got through.`);
     await db.createGeneration(nextGen, out.policy, winId, out.rounds, out.regressionPassed, out.legitPassed, lesson);
     console.log(`[immune] gen ${nextGen} live after ${out.rounds} round(s). regression=${out.regressionPassed} alive=${out.legitPassed} autoimmune=${out.autoimmune}`);
     if (prize > 0) { await report('paying out'); await payout((await db.breachById(winId))!); }
@@ -285,24 +290,58 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
  * the lock, the next request to come along picks the work back up. the game converges no matter how
  * many instances die along the way.
  */
+/**
+ * is the house selling games? it has to be able to pay for a reply, and it must not be sitting on a
+ * loss it cannot afford to learn from: a game sold then is a game against rules that have already
+ * been beaten and cannot yet be fixed. the machine's wins do not count here: their lessons are paid
+ * from the machine's allowance and never wait on the players' share.
+ *
+ * this is the question asked before a stake is taken and the one the page is shown. `awake` is the
+ * narrower one, asked before each thought: can this thought be paid for.
+ */
+export async function playable(fresh = false): Promise<Awake> {
+  const a = await awake(fresh);
+  if (!a.ok) return a;
+  const win = await db.unfinishedWin();
+  if (!win || FREE_PLAYERS.has(win.player)) return a;
+  const l = await canLearn();
+  return l.ok ? a : { ...a, ok: false, why: l.why, ...(l.wakesIn ? { wakesIn: l.wakesIn } : {}) };
+}
+
+/**
+ * prizes that were won on a generation whose lesson is waiting for money. they were won, they are set
+ * aside, and prize money is not thinking money: they are paid without waiting for the lesson. every
+ * one of them, not only the newest win: two wins can land on one generation, and the later one may
+ * be worth nothing while the earlier one took the pot. paid under the lesson's own lock, so nothing
+ * else can be paying the same win at the same moment; looked at once a minute at most, and the lock
+ * is not touched at all unless something can actually be sent.
+ */
+let lastWaitingLook = 0;
+async function payWaiting(): Promise<void> {
+  if (flag('PAYOUTS_OFF') || Date.now() - lastWaitingLook < 60_000) return;
+  lastWaitingLook = Date.now();
+  const sendable: db.Breach[] = [];
+  for (const w of await db.owedUnlearned()) if (!(await db.payableAt(w.player, PURSE_DAILY_CAP)).at) sendable.push(w);
+  if (!sendable.length || !(await db.acquireLock(LOCK, 'paying'))) return;
+  try {
+    await db.setLockPhase(LOCK, 'paying out');
+    for (const w of sendable) {
+      const fresh = await db.breachById(w.id);
+      if (!fresh || owedOf(fresh) <= 0) continue;
+      const held = await payout(fresh);
+      if (held) console.warn(`[payout] win #${w.id} not paid yet, while its lesson waits for thinking money: ${held}`);
+    }
+  } catch (e) { console.error('[payout] while a lesson waits:', (e as Error).message); }
+  finally { await db.releaseLock(LOCK); }
+}
+
 export async function resumeHardening(): Promise<void> {
   if (await db.lockSince(LOCK)) return;
   const win = await db.unfinishedWin();
   if (!win) return;
-  if (!(await awake()).ok) {
-    // learning costs thoughts, and waits until the house can pay for them. the prize does not wait
-    // with it: it was won, it is set aside, and prize money is not thinking money. it is paid under
-    // the lesson's own lock, so nothing else can be paying the same win at the same moment.
-    if (owedOf(win) > 0 && (await db.acquireLock(LOCK, String(win.id)))) {
-      try {
-        await db.setLockPhase(LOCK, 'paying out');
-        const held = await payout(win);
-        if (held) console.warn(`[payout] win #${win.id} not paid yet, while its lesson waits for thinking money: ${held}`);
-      } catch (e) { console.error('[payout] while the lesson waits:', (e as Error).message); }
-      finally { await db.releaseLock(LOCK); }
-    }
-    return;
-  }
+  // learning costs thoughts, and waits until the house can pay for them: for a reply at all, and for a
+  // lesson. the prizes do not wait with it.
+  if (!(await playable()).ok) return void (await payWaiting());
   const failed = await db.getGeneration(win.gen);
   if (!failed) return;
   console.log(`[immune] resuming an unfinished hardening for win #${win.id}`);
