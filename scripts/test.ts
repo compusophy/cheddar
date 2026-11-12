@@ -272,6 +272,15 @@ async function main() {
   check('and the policy allows scripts from here and nowhere else', /(^|;)\s*script-src 'self'\s*(;|$)/.test(policy), policy);
   const lib = fs.readFileSync(path.join(process.cwd(), 'public', 'vendor', 'ethers-6.13.4.umd.min.js'));
   const libHash = crypto.createHash('sha384').update(lib).digest('base64');
+  // tempo wallet, for filling a purse: tempo's accounts sdk, bundled by web/ and served from here. it is
+  // loaded only when asked for. a change to that file is a change to what runs beside the purse key, so
+  // it is pinned: rebuild it (npm run build in web/), read what changed, and only then move this hash.
+  const walletLib = fs.readFileSync(path.join(process.cwd(), 'public', 'vendor', 'tempo-wallet.js'));
+  const walletHash = crypto.createHash('sha384').update(walletLib).digest('base64');
+  check('the wallet bundle is the one that was built and read', walletHash === 'hMxHS3bDn8nJ/rcyb0FWnkrcYT3kKctbnKFfiiskxLYy0KDvWvkfBSDkIaCPvrUz', walletHash);
+  check('the page frames the wallet and nothing else', /(^|;)\s*frame-src https:\/\/wallet\.tempo\.xyz\s*(;|$)/.test(policy) && !/frame-src[^;]*(\*|'self'|http:)/.test(policy), policy);
+  const pageJs = fs.readFileSync(path.join(process.cwd(), 'public', 'app.js'), 'utf8');
+  check('and loads its code from here, when asked', /s\.src = '\/vendor\/tempo-wallet\.js'/.test(pageJs) && !/<script[^>]*tempo-wallet/.test(page));
   check('the library that holds the purse key is the published build of ethers 6.13.4, byte for byte', libHash === '6Zl0Pc8zjSz8KvmNeXRvUQgY4ryFb+BwDvKCmLYcBME0joAaru491tQgi9B7zsMM', libHash);
 
   console.log('a visitor is a network, not an address');

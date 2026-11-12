@@ -171,6 +171,13 @@ td.dim { color: var(--dim); } td.money { color: var(--green); text-align: right;
 .card .addr code { flex: 1; min-width: 0; padding: var(--u); overflow-wrap: anywhere; font: inherit; user-select: all; }
 .card .addr button { padding: var(--u); border: none; border-left: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
 .card #addhow { margin-top: var(--h); }
+/* fill the purse from tempo wallet: an amount and one button */
+.card .fill { display: flex; align-items: stretch; margin-top: var(--h); border: 1px solid var(--line); }
+.card .fill .unit { padding: var(--u) 0 var(--u) var(--u); color: var(--dim); }
+.card .fill input { flex: 1; min-width: 0; margin: 0; padding: var(--u) var(--u) var(--u) 2px; border: none; background: transparent; color: var(--fg); font: inherit; }
+.card .fill button { padding: var(--u); border: none; border-left: 1px solid var(--line); background: var(--gold); color: #000; font-weight: 600; cursor: pointer; }
+.card .fill button:disabled { opacity: 0.6; cursor: default; }
+.card #fillhow { margin-top: var(--h); }
 .card a { color: var(--fg); }
 .card details.other { margin-top: var(--u); }
 .card details.other summary { color: var(--dim); cursor: pointer; }

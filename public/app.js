@@ -109,6 +109,8 @@ async function fillIfEmpty() {
   paintBalance(balance > 0); status('');
 }
 
+/** ?wallet: show "fill from tempo wallet" on play money too, to try the wallet without spending anything. */
+const tryWallet = new URLSearchParams(location.search).has('wallet');
 /** the page says what kind of money this is, once it knows. */
 function describeMoney() {
   const real = !!state.real;
@@ -119,7 +121,9 @@ function describeMoney() {
     : `test dollars, kept in this browser. they are worth nothing, but every stake and every payout is a real transaction. each game stakes ${money(state.stake)}; most of it goes into the pot. when the purse cannot afford a game the house puts in ${money(state.grant)}, once a day.`;
   const thinks = $('#thinks');
   if (thinks) thinks.textContent = 'it buys each reply itself, out of the stakes. no api key anywhere.';
-  $('#addmoney').classList.toggle('hidden', !real);
+  // real money has to come from somewhere. (?wallet shows the same on play money, to try the wallet without spending anything.)
+  $('#addmoney').classList.toggle('hidden', !(real || tryWallet));
+  $('#fillhow').textContent = `tempo wallet is tempo's own: a passkey, no app, and it takes a card or a bank transfer. it opens in its own window, and nothing leaves it without your say there. this page never sees its key.`;
   $('#addr').textContent = purse.address;
   $('#addhow').innerHTML = `send <b>${esc(state.symbol)}</b> on the <b>tempo</b> network to this address. only ${esc(state.symbol)}, only tempo: anything else will not show up here. a dollar is ${Math.floor(1 / needed())} games.`
     + `<br><br>no ${esc(state.symbol)} yet? 1. open <a href="https://wallet.tempo.xyz" target="_blank" rel="noopener noreferrer">tempo wallet</a> (a passkey, no app). 2. press add funds there: card, bank or another chain. 3. send some to the address above. or use a <a href="https://tempo.xyz/developers/docs/partners/bridges" target="_blank" rel="noopener noreferrer">bridge</a>.`;
@@ -674,6 +678,65 @@ function openPurse() {
 }
 function closePurse() { sheet('#cashout', false); clearInterval(purseWatch); purseWatch = null; disarmSend(); if (!$('#status').textContent) status(''); }
 $('#purse').onclick = openPurse;
+
+/**
+ * fill the purse from tempo wallet.
+ *
+ * the wallet is tempo's own (wallet.tempo.xyz: a passkey, with a card and bank on-ramp built in).
+ * its code is tempo's accounts sdk, served from this site and loaded only when this is pressed.
+ * three steps, each of them the wallet's own window: choose the account; add funds there, if it
+ * holds less than was asked for; approve sending the amount to this purse. the page holds nothing
+ * of the wallet's, and nothing moves that the person did not approve in that window.
+ */
+let walletLib = null;
+const loadWallet = () => (walletLib ||= new Promise((ok, no) => {
+  const s = document.createElement('script');
+  s.src = '/vendor/tempo-wallet.js';
+  s.onload = () => (window.tempoWallet ? ok(window.tempoWallet) : no(new Error('the wallet did not load')));
+  s.onerror = () => { walletLib = null; no(new Error('the wallet could not be loaded. check your connection and try again')); };
+  document.head.appendChild(s);
+}));
+const holds = async (address) => Number((await api('/balance/' + address)).balance) || 0;
+let filling = false;
+$('#fillgo').onclick = async () => {
+  if (filling) return;
+  const say = (t) => { $('#cashstatus').textContent = t; };
+  const amount = Math.round(Number(String($('#fillamount').value).replace(',', '.')) * 100) / 100;
+  if (!(amount >= needed()) || amount > 500) return say(`an amount between ${money(needed())} and $500.`);
+  filling = true; $('#fillgo').disabled = true;
+  const where = { testnet: !state.real, chainId: state.chain };
+  let sent = false;
+  try {
+    say('opening tempo wallet…');
+    const wallet = await loadWallet();
+    const from = await wallet.connect(where);
+    let has = await holds(from);
+    if (has < amount) {
+      say(`that wallet holds ${money(has)}. add funds in its window.`);
+      await wallet.deposit({ ...where, address: from, token: state.token, amount: amount.toFixed(2) });
+      for (let i = 0; i < 20 && has < amount; i++) { await sleep(3000); has = await holds(from); }
+      if (has < amount) return say(`the wallet holds ${money(has)} so far. money from a card or a bank can take a few minutes: press again when it is there.`);
+    }
+    say(`approve sending ${money(amount)} to your purse, in the wallet's window.`);
+    await wallet.send({ ...where, token: state.token, to: purse.address, amount: amount.toFixed(2) });
+    sent = true;
+    // "send all" goes back where the money came from, unless they have said somewhere else.
+    if (!$('#cashto').value.trim()) $('#cashto').value = from;
+    say('sent. waiting for it to land…');
+    const had = balance;
+    for (let i = 0; i < 20 && balance <= had + 0.000001; i++) { await sleep(2000); await readBalance(); }
+    paintBalance(balance > had);
+    const keep = state.real && !ls.get('keySaved') ? ' copy your key now and keep it somewhere safe: if this browser forgets it, this money is gone.' : '';
+    say(balance > had ? `${money(balance - had)} arrived. you can play.${keep}` : 'it was sent and has not shown up here yet. it will: this page keeps looking.');
+  } catch (e) {
+    const why = String(e?.shortMessage || e?.message || e || '').slice(0, 160);
+    const walked = e?.code === 4001 || /reject|denied|cancel|closed|dismiss/i.test(why);
+    say(sent ? `it was sent, but this page lost track of it (${why}). it will show up here by itself.`
+      : /popup/i.test(why) && /block/i.test(why) ? 'your browser blocked the wallet\'s window. allow pop-ups for this site and press again. nothing was sent.'
+      : walked ? 'the wallet was closed. nothing was sent.'
+      : `that did not go through: ${why || 'no reason given'}. nothing was sent from this page; the wallet's own history is the record.`);
+  } finally { filling = false; $('#fillgo').disabled = false; }
+};
 $('#cashclose').onclick = closePurse;
 // and on coming back to the page from somewhere else (a wallet, most likely), one look.
 document.addEventListener('visibilitychange', () => { if (!document.hidden && state) lookForMoney(); });
