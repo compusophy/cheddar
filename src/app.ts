@@ -13,6 +13,7 @@ import * as treasury from './treasury';
 import * as bot from './bot';
 import { net, flag } from './net';
 import * as pay from './pay';
+import * as clock from './clock';
 
 let waitUntil: (p: Promise<unknown>) => void = (p) => { void p; };
 try { waitUntil = require('@vercel/functions').waitUntil; } catch { /* not on vercel */ }
@@ -22,6 +23,9 @@ export const app = express();
 app.use(cors());
 // the raw bytes are kept too: a payment credential can be bound to the exact body it was made for.
 app.use(express.json({ limit: '64kb', verify: (req, _res, buf) => { (req as any).rawBody = buf; } }));
+// each request notes when it began: a function has a fixed time to live, and a lesson or a payout
+// that carries on after the reply shares it with whatever the request did first.
+app.use((_req, _res, next) => clock.enter(() => next()));
 app.use(async (_req, _res, next) => { try { await db.init(); next(); } catch (e) { next(e); } });
 
 /**

@@ -17,6 +17,7 @@ import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, RATE, about, saidIt } from './ga
 import * as treasury from './treasury';
 import { flag, num } from './net';
 import { awake, Broke } from './think';
+import { mustEndBy } from './clock';
 
 export type ChatResult = { status: number; body: any };
 /** a nickname is plain text on a public board: short, printable, no control characters, no lookalike-of-the-machine. */
@@ -26,10 +27,18 @@ const cleanNick = (n: unknown) => {
 };
 const LOCK = 'harden';
 /**
- * how long a lesson may take. the function it runs in is killed at 300 seconds, and the lesson is
- * followed by a sentence about what was learned and by the payout, so it stops well short of that.
+ * how long a lesson may take, at most. the function it runs in is killed 300 seconds after the request
+ * that started it, and a lesson is followed by a sentence about what was learned and by the payout,
+ * so it stops well short of that. when the request already spent a good part of that time before the
+ * lesson began (the machine plays a whole game first), the lesson gets what is left, not the full
+ * amount: see `lessonDeadline`.
  */
 const LESSON_MS = Math.max(20, num('LESSON_SECONDS', 200)) * 1000;
+/** kept back after a lesson for the sentence about it and for the payout to be signed and seen. */
+const AFTER_LESSON_MS = 35_000;
+const lessonDeadline = () => Math.min(Date.now() + LESSON_MS, mustEndBy(AFTER_LESSON_MS));
+/** a lesson is not begun with less than this: it would be a rushed one, and the next request can give it a full turn. */
+const LESSON_MIN_MS = Math.min(60_000, LESSON_MS / 2);
 const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()].filter(Boolean));
 /** the machine's own address: it plays free, outside the rate limits, and can win nothing. */
 export const playsFree = (address: string) => FREE_PLAYERS.has(String(address).toLowerCase());
@@ -210,9 +219,14 @@ async function turn(s: db.SessionRow, message: string, onDelta?: (t: string) => 
 
 /** learn from the win, then pay it. one at a time across every function instance, via a db lock. */
 export async function runHardening(failed: db.Generation, winId: number, prize: number): Promise<void> {
+  // this request may have used most of its time already (the machine plays a whole game before it
+  // wins). a lesson squeezed into what is left would be cut short, so it is left for the next request,
+  // which has a full allowance: the win stays unlearned, nobody plays that generation meanwhile, and
+  // the first page or message to arrive picks the lesson up.
+  if (lessonDeadline() - Date.now() < LESSON_MIN_MS) { console.warn(`[immune] win #${winId}: too little of this request left for a lesson; the next request picks it up`); return; }
   if (!(await db.acquireLock(LOCK, String(winId)))) return;
   const report = (phase: string) => db.setLockPhase(LOCK, phase);
-  const deadline = Date.now() + LESSON_MS;
+  const deadline = lessonDeadline();
   try {
     await report('reading');
     const win = (await db.breachById(winId))!;
