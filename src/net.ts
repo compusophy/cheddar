@@ -10,7 +10,10 @@ export type Net = {
   /** true when the dollars are worth dollars. the welcome grant and the faucet only exist when this is false. */
   real: boolean;
   chainId: number;
+  /** the chain endpoint this server talks to. TEMPO_RPC can make it a private one, often with a key in its address: it never leaves the server. */
   rpc: string;
+  /** the chain endpoint a browser is told to use: always the network's public one, which is also the only one the page's own policy lets it reach. */
+  publicRpc: string;
   explorer: string;
   token: `0x${string}`;
   symbol: string;
@@ -26,7 +29,7 @@ function load(): Net {
   if (which === 'testnet') {
     return {
       name: 'testnet', real: false, chainId: 42431,
-      rpc: env('TEMPO_RPC') || 'https://rpc.moderato.tempo.xyz',
+      rpc: env('TEMPO_RPC') || 'https://rpc.moderato.tempo.xyz', publicRpc: 'https://rpc.moderato.tempo.xyz',
       explorer: 'https://explore.moderato.tempo.xyz',
       token: '0x20c0000000000000000000000000000000000000', symbol: 'pathUSD',
     };
@@ -37,7 +40,7 @@ function load(): Net {
   if (!symbol) throw new Error('[net] mainnet needs TOKEN_SYMBOL: the name players are told to send (for example USDC.e).');
   return {
     name: 'mainnet', real: true, chainId: 4217,
-    rpc: env('TEMPO_RPC') || 'https://rpc.tempo.xyz',
+    rpc: env('TEMPO_RPC') || 'https://rpc.tempo.xyz', publicRpc: 'https://rpc.tempo.xyz',
     explorer: 'https://explore.tempo.xyz',
     token, symbol,
   };

@@ -289,7 +289,20 @@ export async function resumeHardening(): Promise<void> {
   if (await db.lockSince(LOCK)) return;
   const win = await db.unfinishedWin();
   if (!win) return;
-  if (!(await awake()).ok) return; // learning costs thoughts too; wait until the house can pay for them
+  if (!(await awake()).ok) {
+    // learning costs thoughts, and waits until the house can pay for them. the prize does not wait
+    // with it: it was won, it is set aside, and prize money is not thinking money. it is paid under
+    // the lesson's own lock, so nothing else can be paying the same win at the same moment.
+    if (owedOf(win) > 0 && (await db.acquireLock(LOCK, String(win.id)))) {
+      try {
+        await db.setLockPhase(LOCK, 'paying out');
+        const held = await payout(win);
+        if (held) console.warn(`[payout] win #${win.id} not paid yet, while its lesson waits for thinking money: ${held}`);
+      } catch (e) { console.error('[payout] while the lesson waits:', (e as Error).message); }
+      finally { await db.releaseLock(LOCK); }
+    }
+    return;
+  }
   const failed = await db.getGeneration(win.gen);
   if (!failed) return;
   console.log(`[immune] resuming an unfinished hardening for win #${win.id}`);

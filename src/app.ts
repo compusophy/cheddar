@@ -70,7 +70,9 @@ async function makeState() {
   return {
     gen: gen.gen, policy: gen.policy, learning: phase ? { phase: /^\d+$/.test(phase) ? 'reading the conversation that beat it' : phase } : null,
     word: WORD, stake: STAKE, grant: GRANT, jackpot: pot, seed: JACKPOT_SEED, share: JACKPOT_SHARE,
-    house: treasury.agentAddress, token: net.token, symbol: net.symbol, rpc: net.rpc, chain: net.chainId,
+    // the page is told the network's public endpoint, never the one this server uses: TEMPO_RPC may be
+    // a private one with a key in its address, and this answer is handed to every visitor.
+    house: treasury.agentAddress, token: net.token, symbol: net.symbol, rpc: net.publicRpc, chain: net.chainId,
     // real: the dollars are worth dollars. the page uses it to stop offering a welcome grant and to
     // show how to add money instead. closed: the operator has stopped new games (open ones play out).
     network: net.name, real: net.real, closed: flag('CLOSED'),

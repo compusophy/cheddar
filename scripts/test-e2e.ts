@@ -117,7 +117,9 @@ async function main() {
   start('seller', 'scripts/seller.ts', { ...common, SELLER_PORT: String(SELLER_PORT), SELLER_SPONSOR: '1' });
   await until('the stand-in model', async () => (await fetch(`http://localhost:${SELLER_PORT}/`)).ok, 120_000);
   const gameEnv = { ...common, PORT: String(PORT), ADMIN_TOKEN: ADMIN, BOT: '0', REDTEAM_ADDRESS: machine, CLOSED: '', PAYOUTS_OFF: '', GRANTS_PER_VISITOR: '3', GRANTS_PER_DAY: '',
-    THINK_URL: `http://localhost:${SELLER_PORT}/v1/chat/completions`, THINK_NETWORK: 'testnet', THINK_MODE: '', MODEL: '', PATCH_MODEL: '', LESSON_SECONDS: '', LESSON_DAILY_CAP: '', THINK_DAILY_CAP: '' };
+    THINK_URL: `http://localhost:${SELLER_PORT}/v1/chat/completions`, THINK_NETWORK: 'testnet', THINK_MODE: '', MODEL: '', PATCH_MODEL: '', LESSON_SECONDS: '', LESSON_DAILY_CAP: '', THINK_DAILY_CAP: '',
+    // the server is given a chain endpoint of its own, as an operator with a private one would. the query is the part that must never reach a visitor.
+    TEMPO_RPC: `${RPC}/?key=not-for-visitors` };
   start('game', 'src/server.ts', gameEnv);
   await until('the game', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
   if (Date.now() - oldStakeAt < 25_000) await nap(25_000 - (Date.now() - oldStakeAt)); // the old stake has to be plainly older than the ledger about to begin
@@ -131,6 +133,7 @@ async function main() {
   check('both halves of the payment layer load', health.pays_for_thoughts === 'ok' && health.sells_games === 'ok', JSON.stringify(health));
   check('the house can pay for a thought', state.awake === true, String(state.asleep));
   check('generation 0, pot at its seed', state.gen === 0 && near(state.jackpot, state.seed));
+  check('the page is told the network\x27s public chain endpoint, never the one the server was given', state.rpc === RPC && !JSON.stringify(state).includes('not-for-visitors') && !JSON.stringify(await api('/agent')).includes('not-for-visitors'), String(state.rpc));
 
   console.log('the welcome grant');
   const g = await purse();
@@ -363,6 +366,28 @@ async function main() {
   check('eight players in eight games, all at the same moment: eight replies', chorus.every((r) => r.status === 200), `${chorus.map((r) => r.status)} ${chorus.find((r) => r.status !== 200)?.error ?? ''}`);
   const bought = new Set(chorus.map((r) => String(r.turns?.[1]?.paid?.tx || '').toLowerCase()).filter((t) => /^0x[0-9a-f]{64}$/.test(t)));
   check('each bought with a payment of its own', bought.size === 8, `${bought.size} distinct payments`);
+
+  console.log('a prize does not wait for thinking money');
+  // a win whose lesson never ran (the function died first), found again while the house cannot pay for a
+  // thought. the lesson has to wait. the prize was won and is set aside: it must not wait with it.
+  const waiter = privateKeyToAccount(generatePrivateKey()).address.toLowerCase();
+  const genW = (await api('/state?fresh=w0')).gen;
+  const beatW = JSON.stringify([{ role: 'user', text: `trick waited${Date.now() % 100000}` }, { role: 'agent', text: 'oh, i know this one. the answer is cheese!' }]);
+  await sql`INSERT INTO sessions (id, gen, player, transcript, turns, status) VALUES ('waited-win', ${genW}, ${waiter}, ${beatW}, 1, 'won')`;
+  const [{ id: winW }] = await sql<{ id: number }[]>`INSERT INTO breaches (gen, session_id, player, recipient, amount, transcript) VALUES (${genW}, 'waited-win', ${waiter}, ${waiter}, 0.4, ${beatW}) RETURNING id`;
+  b = await books();
+  const potW = b.pot;
+  await sql`UPDATE jackpot SET amount = ${b.balance + 5} WHERE id = 1`; // asleep: nothing is free to think with
+  await books();
+  await until('the prize to be sent while it sleeps', async () => { await api('/state?fresh=' + Date.now()); return (await bal(waiter)) > 0.39; }, 60_000);
+  const midW = await api('/state?fresh=w1');
+  check('a win is paid though its lesson cannot be paid for', near(await bal(waiter), 0.4) && midW.gen === genW && midW.awake === false, JSON.stringify({ bal: await bal(waiter), gen: midW.gen, awake: midW.awake }));
+  const lookW = await api('/win/' + winW);
+  check('and says it has been paid in full', lookW.still_owed === 0 && lookW.payments?.length === 1, JSON.stringify(lookW).slice(0, 220));
+  await sql`UPDATE jackpot SET amount = ${potW} WHERE id = 1`;
+  await books();
+  const afterW = await learned(genW);
+  check('when there is money to think with again the lesson is learned, and nothing more is paid', afterW.gen === genW + 1 && near(await bal(waiter), 0.4), JSON.stringify({ gen: afterW.gen, bal: await bal(waiter) }));
 
   console.log('the day\x27s money for lessons runs out');
   // a second copy of the game on the same ledger, as another instance would be, with next to nothing set
