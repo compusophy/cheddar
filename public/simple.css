@@ -9,6 +9,9 @@ h1 { margin: 2rem 0 0; font-size: 1.9rem; line-height: 1.15; font-weight: 700; }
 .dim { color: var(--dim); font-size: 0.9rem; }
 .said { min-height: 1.45em; margin: 0.75rem 0; color: var(--dim); }
 .hidden { display: none; }
+/* the name, as one word in two colours */
+.brand { font-weight: 700; }
+.brand em { font-style: normal; color: var(--gold); }
 
 button { font: inherit; cursor: pointer; }
 #me { padding: 0.4rem 0.8rem; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--fg); }
