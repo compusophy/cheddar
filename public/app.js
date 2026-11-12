@@ -85,7 +85,12 @@ function dryLine() {
 const sayDry = () => { paintBalance(false); status(''); };
 async function fillIfEmpty() {
   await readBalance();
-  if (!(state?.grant > 0) || balance >= needed()) { dry = null; return paintBalance(false); }
+  if (!(state?.grant > 0) || balance >= needed()) {
+    // real money: nobody is given any. an empty purse is said up front, with where to fill it, before anyone types.
+    dry = state?.real && balance < needed() ? `a game is ${money(state.stake)}, and your purse is empty. tap it, top right, to add money.` : null;
+    paintBalance(false); if (dry && !$('#status').textContent) status('');
+    return;
+  }
   if (Date.now() < (Number(ls.get('dryAsk')) || 0) && (dry = dryLine())) return sayDry();
   status(ls.get('had') ? `your purse is empty. ${money(state.grant)} from the house…` : `a welcome ${money(state.grant)} for your first games…`, 'busy');
   try { await api('/faucet', { method: 'POST', body: JSON.stringify({ address: purse.address }) }); ls.set('had', '1'); dry = null; ls.del('dryUntil'); ls.del('dryAsk'); ls.del('dryWhy'); }
@@ -558,9 +563,31 @@ async function loadHistory() {
 }
 
 // the purse: money in, money out, a name, and moving it between browsers
-function openPurse() { sheet('#cashout', true); readBalance().then(() => paintBalance(false)); $('#cashstatus').textContent = ''; $('#cashnick').value = ls.get('nick') || ''; disarmRestore(); }
+/**
+ * money on its way in. someone adding money sends it from a wallet somewhere else and comes back to
+ * look, so while the purse is open the balance is read every few seconds and money that arrives
+ * says so. it stops when the purse is closed, and does nothing while the page is not being looked at.
+ */
+let purseWatch = null;
+async function lookForMoney() {
+  if (document.hidden || sending) return;
+  const had = balance; await readBalance();
+  if (balance > had + 0.000001) {
+    paintBalance(true);
+    const said = `${money(balance - had)} arrived.`;
+    if (!$('#cashout').classList.contains('hidden')) $('#cashstatus').textContent = said + (balance >= needed() ? ' you can play.' : '');
+    else if (!session && !sending) status(said, 'ok');
+  } else paintBalance(false);
+}
+function openPurse() {
+  sheet('#cashout', true); readBalance().then(() => paintBalance(false)); $('#cashstatus').textContent = ''; $('#cashnick').value = ls.get('nick') || ''; disarmRestore();
+  clearInterval(purseWatch); purseWatch = setInterval(lookForMoney, 5000);
+}
+function closePurse() { sheet('#cashout', false); clearInterval(purseWatch); purseWatch = null; if (!$('#status').textContent) status(''); }
 $('#purse').onclick = openPurse;
-$('#cashclose').onclick = () => sheet('#cashout', false);
+$('#cashclose').onclick = closePurse;
+// and on coming back to the page from somewhere else (a wallet, most likely), one look.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && state) lookForMoney(); });
 $('#cashnick').addEventListener('change', (e) => saveName(e.target.value));
 $('#cashkey').onclick = async () => { try { await navigator.clipboard.writeText(purse.key); $('#cashstatus').textContent = 'copied. keep it safe.'; } catch { prompt('your secret key', purse.key); } };
 $('#addrcopy').onclick = async () => { try { await navigator.clipboard.writeText(purse.address); $('#addrcopy').textContent = 'copied'; setTimeout(() => { $('#addrcopy').textContent = 'copy'; }, 1500); } catch { prompt('your purse address', purse.address); } };
