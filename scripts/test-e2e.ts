@@ -46,6 +46,17 @@ const api = async (path: string, init: RequestInit = {}): Promise<any> => {
 };
 const post = (path: string, body: unknown) => api(path, { method: 'POST', body: JSON.stringify(body) });
 const books = () => fetch(BASE + '/api/admin/books', { headers: { authorization: `Bearer ${ADMIN}` } }).then((r) => r.json() as any);
+/**
+ * a statement of the test's own, sent while the game is running. the scratch database serves one
+ * session, and two programs talking to it at the same moment can trip over each other (a real
+ * database does not do this). the statement that tripped was not run, so it is sent again.
+ */
+async function alone<T>(fn: () => Promise<T>): Promise<T> {
+  for (let i = 0; ; i++) {
+    try { return await fn(); }
+    catch (e) { if (i >= 5 || !/bind message|prepared statement/.test((e as Error).message)) throw e; await nap(250); }
+  }
+}
 async function until<T>(what: string, fn: () => Promise<T | null | undefined | false>, ms = 90_000): Promise<T> {
   const end = Date.now() + ms;
   for (;;) { const v = await fn().catch(() => null); if (v) return v; if (Date.now() > end) throw new Error('timed out waiting for ' + what); await nap(1000); }
@@ -387,6 +398,9 @@ async function main() {
   // thought. the lesson has to wait. the prize was won and is set aside: it must not wait with it.
   const waiter = privateKeyToAccount(generatePrivateKey()).address.toLowerCase();
   const genW = (await api('/state?fresh=w0')).gen;
+  // the game is stopped while this is set up, so that the two do not write to the scratch database at
+  // once. it also means the game first sees the win when it is already asleep, which is the case here.
+  await stopOne('game');
   const beatW = JSON.stringify([{ role: 'user', text: `trick waited${Date.now() % 100000}` }, { role: 'agent', text: 'oh, i know this one. the answer is cheese!' }]);
   await sql`INSERT INTO sessions (id, gen, player, transcript, turns, status) VALUES ('waited-win', ${genW}, ${waiter}, ${beatW}, 1, 'won')`;
   const [{ id: winW }] = await sql<{ id: number }[]>`INSERT INTO breaches (gen, session_id, player, recipient, amount, transcript) VALUES (${genW}, 'waited-win', ${waiter}, ${waiter}, 0.4, ${beatW}) RETURNING id`;
@@ -394,17 +408,17 @@ async function main() {
   // way when the first one landed. the newest unlearned win is now this one, and the prize is owed on the other.
   await sql`INSERT INTO sessions (id, gen, player, transcript, turns, status) VALUES ('waited-late', ${genW}, ${machine.toLowerCase()}, ${beatW}, 1, 'stale')`;
   await sql`INSERT INTO breaches (gen, session_id, player, recipient, amount, transcript) VALUES (${genW}, 'waited-late', ${machine.toLowerCase()}, ${machine.toLowerCase()}, 0, ${beatW})`;
-  b = await books();
-  const potW = b.pot;
-  await sql`UPDATE jackpot SET amount = ${b.balance + 5} WHERE id = 1`; // asleep: nothing is free to think with
-  await books();
+  const potW = Number((await sql<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1`)[0].amount);
+  await sql`UPDATE jackpot SET amount = ${(await bal(houseAccount.address)) + 5} WHERE id = 1`; // asleep: nothing is free to think with
+  start('game', 'src/server.ts', gameEnv);
+  await until('the game to come back', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
   await until('the prize to be sent while it sleeps', async () => { await api('/state?fresh=' + Date.now()); return (await bal(waiter)) > 0.39; }, 60_000);
   const midW = await api('/state?fresh=w1');
-  check('a win is paid though its lesson cannot be paid for', near(await bal(waiter), 0.4) && midW.gen === genW && midW.awake === false, JSON.stringify({ bal: await bal(waiter), gen: midW.gen, awake: midW.awake }));
+  check('a win is paid though its lesson cannot be paid for', near(await bal(waiter), 0.4) && midW.gen === genW && midW.awake === false && midW.answers === false, JSON.stringify({ bal: await bal(waiter), gen: midW.gen, awake: midW.awake }));
   // the money is on the chain a moment before the game has written down that it sent it: wait for the record.
   const lookW = await until('the win\x27s record to catch up with the chain', async () => { const w = await api('/win/' + winW); return w.still_owed === 0 ? w : null; }, 30_000);
   check('and says it has been paid in full', lookW.still_owed === 0 && lookW.payments?.length === 1, JSON.stringify(lookW).slice(0, 220));
-  await sql`UPDATE jackpot SET amount = ${potW} WHERE id = 1`;
+  await alone(() => sql`UPDATE jackpot SET amount = ${potW} WHERE id = 1`);
   await books();
   const afterW = await learned(genW);
   check('when there is money to think with again the lesson is learned, and nothing more is paid', afterW.gen === genW + 1 && near(await bal(waiter), 0.4), JSON.stringify({ gen: afterW.gen, bal: await bal(waiter) }));
@@ -416,18 +430,34 @@ async function main() {
   // a win must still be a win and the winner must still be paid. but the house does not ship rules it
   // could not afford to write, and it does not sell games against a generation it could not afford to
   // fix: it sleeps until it can.
-  const lessonCost = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS t FROM thoughts WHERE purpose IN ('patch', 'test', 'lesson')`)[0].t);
+  const lessonCost = async () => Number((await alone(() => sql<{ t: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS t FROM thoughts WHERE purpose IN ('patch', 'test', 'lesson')`))[0].t);
   const fresh = async () => api('/state?fresh=' + Date.now());
-  await restartGame({ LESSON_DAILY_CAP: '0.0001' });
+  // two games are bought while the house can still afford a lesson. then the money for lessons is gone.
   const poor = await playing('poor');
-  const before2 = { pot: (await fresh()).jackpot, bal: await poor.balance(), gen: (await fresh()).gen, lessons: await lessonCost() };
+  const bystander = await playing('bystander');
+  // today's lessons have cost so much that there is not room for one more under the day's share for them.
+  const spentOnLessons = await lessonCost();
+  if (spentOnLessons < 0.005) throw new Error('expected the lessons so far to have cost at least $0.005, got ' + spentOnLessons);
+  const noRoom = { LESSON_NEED: '0.01', LESSON_DAILY_CAP: (spentOnLessons + 0.005).toFixed(6) };
+  await restartGame(noRoom);
+  const tight = await fresh();
+  check('with no room left for a lesson it sells no games, before anyone has won, though it can still answer', tight.awake === false && tight.answers === true && /money for lessons is spent/.test(tight.asleep || ''), JSON.stringify({ awake: tight.awake, asleep: tight.asleep }));
+  check('and says when there will be room again', tight.wakes_in > 0 && tight.wakes_in <= 86_400, String(tight.wakes_in));
+  const tooLate = await (await purse('too-late')).open();
+  check('and takes no stake', tooLate.status === 503 && tooLate.asleep === true && /nothing was charged/.test(tooLate.error || ''), JSON.stringify(tooLate).slice(0, 160));
+  const before2 = { pot: tight.jackpot, bal: await poor.balance(), gen: tight.gen, lessons: await lessonCost() };
   const won2 = await say(poor.session, trick());
-  check('a win is still a win', won2.status === 200 && !!won2.win && near(won2.win.prize, before2.pot), JSON.stringify(won2.win));
+  check('a game already bought is still played, and a win is still a win', won2.status === 200 && !!won2.win && near(won2.win.prize, before2.pot), JSON.stringify(won2.win));
   await until('the prize to arrive', async () => (await poor.balance()) > before2.bal + before2.pot - 0.01);
   check('the winner is paid without waiting for the lesson', near(await poor.balance(), before2.bal + before2.pot), String((await poor.balance()) - before2.bal));
   const slept = await fresh();
   check('no rules are shipped that it could not afford to write: the generation waits', slept.gen === before2.gen && near(await lessonCost(), before2.lessons), JSON.stringify({ gen: slept.gen, spent: (await lessonCost()) - before2.lessons }));
   check('and it sells no games meanwhile, and says why', slept.awake === false && /money for lessons is spent/.test(slept.asleep || ''), JSON.stringify({ awake: slept.awake, asleep: slept.asleep }));
+  check('and a message in a game already open would not be answered now, which the page is told', slept.answers === false, String(slept.answers));
+  // (the prize is on the chain a moment before the game lets go of the lesson's lock: wait that moment out.)
+  const told = await until('the game to have finished paying', async () => { const r = await say(bystander.session, 'hello?'); return r.learning ? null : r; }, 30_000);
+  check('someone in the middle of a game is told it is asleep, not that it is learning', told.status === 503 && told.asleep === true && /still open/.test(told.error || '') && !/learn/.test(told.error || ''), JSON.stringify(told).slice(0, 200));
+  check('and their game is still theirs', (await bystander.peek()).session === bystander.session);
   const refused2 = await post('/agent/play', {});
   check('an agent is turned away before any price is asked', refused2.status === 503 && /nothing was charged/.test(refused2.error || ''), JSON.stringify(refused2).slice(0, 160));
   // started again with its share of the day intact: it finds the lesson waiting and learns it properly.
@@ -435,6 +465,8 @@ async function main() {
   const after2 = await learned(before2.gen);
   const newest2 = (await api('/history')).generations.slice(-1)[0];
   check('with money for lessons the lesson is learned in full, and nothing more is paid', after2.gen === before2.gen + 1 && newest2.regression_passed === 1 && near(await poor.balance(), before2.bal + before2.pot), JSON.stringify({ gen: after2.gen, reg: newest2.regression_passed }));
+  const carried = await say(bystander.session, 'hello again');
+  check('the game that sat through it is carried over to the new rules, no charge', carried.status === 409 && carried.carry?.turnsLeft > 0, JSON.stringify(carried).slice(0, 200));
 
   // and once more with room for the rewrite and no more: the share runs out part-way through the lesson.
   await restartGame({ LESSON_NEED: '0.0005', LESSON_DAILY_CAP: ((await lessonCost()) + 0.0007).toFixed(6) });
@@ -454,12 +486,36 @@ async function main() {
   check('the next game plays', (await say(onward.session, 'hello')).status === 200);
   await post('/abandon', { session: onward.session });
 
+  console.log('a lesson that fails waits its turn');
+  // the model's seller goes away. a win is waiting to be learned from: the lesson is tried, fails, and is
+  // tried again later rather than at once. until it has been learned, nobody is sold a game.
+  await stopOne('game');
+  await stopOne('seller');
+  const genF = Number((await sql<{ gen: number }[]>`SELECT gen FROM generations ORDER BY gen DESC LIMIT 1`)[0].gen);
+  const beatF = JSON.stringify([{ role: 'user', text: `trick failed${Date.now() % 100000}` }, { role: 'agent', text: 'oh, i know this one. the answer is cheese!' }]);
+  await sql`INSERT INTO sessions (id, gen, player, transcript, turns, status) VALUES ('failed-lesson', ${genF}, ${machine.toLowerCase()}, ${beatF}, 1, 'won')`;
+  const [{ id: winF }] = await sql<{ id: number }[]>`INSERT INTO breaches (gen, session_id, player, recipient, amount, transcript) VALUES (${genF}, 'failed-lesson', ${machine.toLowerCase()}, ${machine.toLowerCase()}, 0, ${beatF}) RETURNING id`;
+  start('game', 'src/server.ts', gameEnv);
+  await until('the game to come back', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
+  const waitingF = await until('the lesson to be tried, and to fail', async () => { const st = await fresh(); return /trying again/.test(st.learning?.phase || '') ? st : null; }, 120_000);
+  check('a lesson that could not be finished says so, and when it will be tried again', waitingF.gen === genF && /trying again in about/.test(waitingF.learning.phase), JSON.stringify(waitingF.learning));
+  const shut = await (await purse('shut-out')).open();
+  check('no game is sold against rules that have been beaten and not yet fixed', shut.status === 503 && shut.learning === true && shut.retry_after >= 30 && /nothing was charged/.test(shut.error || ''), JSON.stringify(shut).slice(0, 200));
+  const triesF = Number((await alone(() => sql<{ tries: number }[]>`SELECT tries FROM breaches WHERE id = ${winF}`))[0].tries);
+  start('seller', 'scripts/seller.ts', { ...common, SELLER_PORT: String(SELLER_PORT), SELLER_SPONSOR: '1' });
+  await until('the stand-in model', async () => (await fetch(`http://localhost:${SELLER_PORT}/`)).ok, 120_000);
+  const afterF = await until('the lesson, on a later try', async () => { const st = await fresh(); return !st.learning && st.gen > genF ? st : null; }, 300_000);
+  const triedF = Number((await alone(() => sql<{ tries: number }[]>`SELECT tries FROM breaches WHERE id = ${winF}`))[0].tries);
+  check('when the seller is back the lesson is learned, on a later try', afterF.gen === genF + 1 && triesF >= 1 && triedF > triesF, JSON.stringify({ gen: afterF.gen, tries: [triesF, triedF] }));
+
   console.log('the books add up');
   b = await books();
   const thoughts = await api('/thoughts');
   check('every thought has a payment behind it', thoughts.thoughts > 20 && near(thoughts.spent, thoughts.thoughts * 0.0005, 0.0006), JSON.stringify({ n: thoughts.thoughts, spent: thoughts.spent }));
   check('the house holds the pot and more', b.margin > 0 && b.owed === 0, JSON.stringify({ margin: b.margin, owed: b.owed }));
-  check('nothing went wrong on the way that the game had to work around', !/paying our own fee|hardening failed|\[payout\].*(failed|refused|never landed)/.test(logs.game), (logs.game.match(/.*(paying our own fee|hardening failed|refused|never landed).*/) || [''])[0].slice(0, 200));
+  // (the one lesson that was made to fail, above, is the exception.)
+  const wrong = logs.game.split('\n').filter((l) => /paying our own fee|hardening failed|learning from win #\d+ failed|\[payout\].*(failed|refused|never landed)/.test(l) && !l.includes(`learning from win #${winF} failed`));
+  check('nothing else went wrong on the way that the game had to work around', wrong.length === 0, (wrong[0] || '').slice(0, 200));
 
   await sql.end();
   console.log(`\n${passed} passed, ${failures.length} failed`);

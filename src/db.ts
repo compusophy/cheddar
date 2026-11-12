@@ -75,6 +75,9 @@ export function init(): Promise<void> {
     await sql`ALTER TABLE disbursements ADD COLUMN IF NOT EXISTS confirmed INT NOT NULL DEFAULT 0`;
     // how many times a lesson has been started for this win. one that keeps failing to finish is cut down.
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`;
+    // every start of its lesson, counted and timed, including the ones that stopped for want of money: the wait before the next is worked out from these.
+    await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS tries INT NOT NULL DEFAULT 0`;
+    await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS tried_at TIMESTAMPTZ`;
     // every thought the ai paid for: what it was for, which model, what it cost, and the payment that bought it.
     await sql`CREATE TABLE IF NOT EXISTS thoughts (
       id SERIAL PRIMARY KEY, purpose TEXT NOT NULL, model TEXT NOT NULL, amount DOUBLE PRECISION NOT NULL,
@@ -339,7 +342,7 @@ export async function claimJackpot(): Promise<number> {
 // the ones left over are handed back as a new game against the new rules, at no charge. it is given
 // once per interrupted game, only for a game that was paid for, and only for the part not yet used.
 
-const CARRY_WHERE = (maxTurns: number) => sql`s.status = 'stale' AND s.turns < ${maxTurns} AND s.updated_at > now() - interval '1 day'
+const CARRY_WHERE = (maxTurns: number) => sql`s.status = 'stale' AND s.turns < ${maxTurns} AND s.updated_at > now() - interval '7 days'
   AND EXISTS (SELECT 1 FROM stakes k WHERE k.session_id = s.id)`;
 /** is there an interrupted paid game waiting for this player? a read; nothing changes. */
 export const carryFor = async (player: string, maxTurns: number) =>
@@ -417,7 +420,7 @@ export const stakedLast24h = async () => Number((await sql<{ t: number }[]>`SELE
 // ---------- generations, sessions, breaches ----------
 
 export type Generation = { id: number; gen: number; policy: string; lesson: string | null; parent_breach_id: number | null; hardening_rounds: number; regression_passed: number; legit_passed: number; created_at: string };
-export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; paid?: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string };
+export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; paid?: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string; attempts?: number; tries?: number; tried_at?: string | Date | null };
 export type SessionRow = { id: string; gen: number; player: string; nickname: string | null; transcript: string; turns: number; status: string; created_at: string; updated_at: string };
 
 export const currentGeneration = async () => (await sql<Generation[]>`SELECT * FROM generations ORDER BY gen DESC LIMIT 1`)[0];
@@ -439,8 +442,10 @@ export async function recordBreach(b: Omit<Breach, 'id' | 'created_at' | 'autoim
   return r.id;
 }
 /** a lesson is starting for this win. returns how many times one has now been started. */
-export const lessonStarted = async (id: number) => Number((await sql<{ attempts: number }[]>`UPDATE breaches SET attempts = attempts + 1 WHERE id = ${id} RETURNING attempts`)[0]?.attempts ?? 1);
+export const lessonStarted = async (id: number) => Number((await sql<{ attempts: number }[]>`UPDATE breaches SET attempts = attempts + 1, tries = tries + 1, tried_at = now() WHERE id = ${id} RETURNING attempts`)[0]?.attempts ?? 1);
 /** it stopped for want of money, not for want of time: that start does not count against it. */
+/** an attempt is over and the lesson is not learned: the wait before the next one is counted from here, not from when it began. */
+export const lessonEnded = (id: number) => sql`UPDATE breaches SET tried_at = now() WHERE id = ${id}`;
 export const lessonPaused = (id: number) => sql`UPDATE breaches SET attempts = GREATEST(attempts - 1, 0) WHERE id = ${id}`;
 /**
  * one message at a time in a game. without this, several messages sent at the same moment were each

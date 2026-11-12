@@ -24,6 +24,9 @@ async function main() {
   const a = await think.awake(true);
   console.log(`balance   ${a.balance === null ? 'not read' : '$' + a.balance}${think.SHARED && a.balance !== null ? `, of which $${a.reserved} is the pot and wins still owed: $${a.available} to think with` : ''}`);
   console.log(`awake     ${a.ok ? 'yes' : 'no: ' + a.why}`);
+  // awake is enough to buy one thought. selling games takes more: room to pay for a whole lesson if a game is lost.
+  const sells = await think.canLearn('house');
+  console.log(`selling   ${sells.ok ? 'yes' : `no: ${sells.why} (a game is sold only with $${think.LESSON_NEED} free for the lesson a loss would need)`}`);
   const prompt = process.argv.slice(2).join(' ').trim();
   if (!prompt) { console.log('\n(pass a message to buy one thought)'); return void (await db.sql.end()); }
   const before = await db.thoughtSpent24h();

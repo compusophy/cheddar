@@ -128,8 +128,9 @@ function describeMoney() {
 // one status line, between the thread and the keyboard
 function status(text, kind) {
   const el = $('#status');
-  // nothing else to say, and the house cannot pay for a reply: say that, before anyone types.
-  if (!text && state && state.awake === false && !state.learning) { text = asleepLine(); kind = 'busy'; }
+  // nothing else to say, and the house is not selling games: say that, before anyone types. someone
+  // in the middle of a game it can still pay to answer is left to play it.
+  if (!text && state && state.awake === false && !state.learning && !(session && state.answers)) { text = asleepLine(); kind = 'busy'; }
   // or the purse cannot afford a game and the house has no dollar for it yet: say that, and when.
   else if (!text && dry && !session && balance < needed()) text = dry;
   // or the house owes this purse the rest of a prize: say so, and when the next of it comes.
@@ -577,7 +578,8 @@ $('#form').addEventListener('submit', async (e) => {
       // and if the game could not be asked either, the thread is left as it is.
     }
     status(said, kind);
-    if (over || /learn|session is|run its course/.test(err.message)) end();
+    // asleep is not over: the game is still open, and it is still theirs when the house wakes.
+    if (over || (!err.body?.asleep && /learn|session is|run its course/.test(err.message))) end();
   }
   sending = false; $('#send').disabled = false; $('#send').textContent = 'send'; $('#msg').focus();
 });

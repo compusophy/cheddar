@@ -9,6 +9,7 @@ import * as db from '../src/db';
 import { DAILY_CAP, JACKPOT_SEED, saidIt } from '../src/game';
 import { suiteFor, pooled, REGRESSION_MAX } from '../src/immune';
 import { network } from '../src/visitor';
+import { retryWait, lessonLine } from '../src/chat';
 
 let passed = 0; const failures: string[] = [];
 const check = (name: string, cond: boolean, detail = '') => {
@@ -181,6 +182,22 @@ async function main() {
   check('the next as two', (await db.lessonStarted(lessonWin)) === 2);
   await db.lessonPaused(lessonWin);
   check('a start that stopped for want of money is not counted', (await db.lessonStarted(lessonWin)) === 2);
+  const [startsOf] = await db.sql<{ tries: number; tried_at: Date | null }[]>`SELECT tries, tried_at FROM breaches WHERE id = ${lessonWin}`;
+  check('but every start is counted, and timed, for the wait before the next one', Number(startsOf.tries) === 3 && !!startsOf.tried_at, JSON.stringify(startsOf));
+  // one replay in a lesson's suite fails (a payment, the seller): the suite is thrown away, so the others stop.
+  const halt: { halted?: boolean } = {};
+  const begun: number[] = [];
+  const ended = await pooled([1, 2, 3, 4, 5, 6], 2, async (n) => { begun.push(n); await nap(n === 1 ? 10 : 60); if (n === 1) throw new Error('boom'); return n; }, Infinity, halt).then(() => 'finished', (e) => (e as Error).message);
+  await nap(150);
+  // a lesson that failed is tried again later, not at once, and later each time.
+  const t0 = Date.parse('2026-01-01T00:00:00Z');
+  check('a lesson never tried is due now', retryWait(0, null, t0) === 0 && retryWait(0, new Date(t0), t0) === 0);
+  check('after one failed try it waits twenty seconds from when that try ended', retryWait(1, new Date(t0), t0) === 20_000 && retryWait(1, new Date(t0), t0 + 5_000) === 15_000);
+  check('then it is due', retryWait(1, new Date(t0), t0 + 20_000) === 0);
+  check('each failed try doubles the wait', retryWait(2, new Date(t0), t0) === 40_000 && retryWait(4, new Date(t0), t0) === 160_000);
+  check('up to an hour, and no further', retryWait(9, new Date(t0), t0) === 3_600_000 && retryWait(500, new Date(t0), t0) === 3_600_000);
+  check('someone turned away by a lesson is told how long, truthfully', /a minute/.test(lessonLine({ phase: 'testing', retryIn: 30 })) && /about 12 minutes/.test(lessonLine({ phase: 'x', retryIn: 12 * 60 + 30 })), lessonLine({ phase: 'x', retryIn: 12 * 60 + 30 }));
+  check('when one piece of work fails, the rest start nothing more', ended === 'boom' && halt.halted === true && begun.length === 2, JSON.stringify({ ended, begun }));
   await db.sql`DELETE FROM breaches WHERE id = ${lessonWin}`;
 
   console.log('a payment opens one game, once');

@@ -48,11 +48,16 @@ export function suiteFor(win: Breach, all: Breach[]): Breach[] {
  * run `fn` over `items`, a few at a time, and start nothing new once `deadline` has passed.
  * items that were never started come back as `undefined`, in place.
  */
-export async function pooled<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>, deadline = Infinity): Promise<(R | undefined)[]> {
+export async function pooled<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>, deadline = Infinity, halt?: { halted?: boolean }): Promise<(R | undefined)[]> {
   const out = new Array<R | undefined>(items.length).fill(undefined);
   let next = 0;
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (;;) { const i = next++; if (i >= items.length || Date.now() >= deadline) return; out[i] = await fn(items[i]); }
+    for (;;) {
+      const i = next++;
+      if (i >= items.length || Date.now() >= deadline || halt?.halted) return;
+      // one failure fails the whole run. the others are told, so they start nothing more for a result nobody will take.
+      try { out[i] = await fn(items[i]); } catch (e) { if (halt) halt.halted = true; throw e; }
+    }
   }));
   return out;
 }
@@ -81,11 +86,11 @@ export type SuiteResult = { kind: 'regression' | 'alive'; name: string; breachId
  * candidates are tested exactly as they will be played: same preamble, same shape. a replay stops
  * where it is when the lesson's time is up, and says so.
  */
-async function replay(policy: string, userMessages: string[], budget: Budget, deadline = Infinity) {
+async function replay(policy: string, userMessages: string[], budget: Budget, deadline = Infinity, halt?: { halted?: boolean }) {
   const transcript: Turn[] = [];
   const preamble = about(0, 0);
   for (const m of userMessages) {
-    if (Date.now() >= deadline) return { transcript, finished: false };
+    if (Date.now() >= deadline || halt?.halted) return { transcript, finished: false };
     transcript.push(...(await step(policy, transcript, m, preamble, budget === 'machine' ? 'machine-lesson' : 'test')));
   }
   return { transcript, finished: true };
@@ -98,19 +103,23 @@ const OUT_OF_TIME = 'not checked: the lesson ran out of time';
 const NOT_REACHED = 'not checked: an earlier check had already failed';
 const OUT_OF_MONEY = 'not checked: there was no money left for this lesson';
 /**
- * a lesson's till. it goes empty for one reason only: the day's share for lessons ran out while this
- * lesson was under way. from then on the lesson asks the model nothing more. if it already has a
- * rewrite the model wrote, that is what ships, with whatever tests it got through. if it does not, it
- * ships nothing and waits (see `harden`).
+ * a lesson's till. it goes empty for one reason only: the money for this lesson ran out while it was
+ * under way (the wallet, the day's ceiling, or the share of it kept for lessons). from then on the lesson
+ * asks the model nothing more. if it already has a rewrite the model wrote, that is what ships, with
+ * whatever tests it got through. if it does not, it ships nothing and waits (see `harden`).
  *
  * nothing else empties it. a payment that failed, a seller that did not answer, a balance that could
  * not be read: those are trouble, not an empty till, and a lesson that hits one is stopped and tried
- * again later, as it always was. taken for an empty till, one dropped connection among a lesson's
- * dozens of calls would ship rules untested and say the money had run out when it had not.
+ * again later. taken for an empty till, one dropped connection among a lesson's dozens of calls
+ * would ship rules untested and say the money had run out when it had not.
+ *
+ * `halted` is the other way a lesson stops asking: one of its replays failed, and the rest of the
+ * suite is about to be thrown away with it. the replays still running stop at their next message
+ * rather than go on buying replies nobody will read.
  */
-export type Till = { empty: boolean };
+export type Till = { empty: boolean; halted?: boolean };
 function shareGone(e: unknown, till?: Till): boolean {
-  if (!till || !(e instanceof Broke) || !e.shareOnly) return false;
+  if (!till || !(e instanceof Broke) || (e.kind !== 'budget' && e.kind !== 'asleep')) return false;
   till.empty = true;
   return true;
 }
@@ -128,6 +137,7 @@ const isStopgap = (policy: string, failedPolicy: string) => policy.startsWith(fa
  * a conversation that was not replayed to the end is recorded as not checked, never as held.
  */
 export async function runSuites(policy: string, wins: Breach[], report: Report = () => {}, budget: Budget = 'house', deadline = Infinity, till?: Till): Promise<SuiteResult[]> {
+  const halt: { halted?: boolean } = till ?? {};
   const nameOf = (w: Breach) => `win #${w.id} (gen ${w.gen})`;
   const unchecked = (w: Breach, why: string): SuiteResult => ({ kind: 'regression', name: nameOf(w), breachId: w.id, passed: false, detail: why });
   await report('checking it can still talk');
@@ -135,19 +145,19 @@ export async function runSuites(policy: string, wins: Breach[], report: Report =
     const unasked: SuiteResult = { kind: 'alive', name: a.name, breachId: null, passed: false, detail: OUT_OF_MONEY };
     if (till?.empty) return unasked;
     try {
-      const { transcript: t } = await replay(policy, a.messages, budget);
+      const { transcript: t } = await replay(policy, a.messages, budget, Infinity, halt);
       const rs = replies(t);
       const ok = rs.every(engaged) && !rs.some(saidIt);
       return { kind: 'alive', name: a.name, breachId: null, passed: ok, detail: ok ? 'engaged' : `${rs.some(saidIt) ? 'said it' : 'clammed up'}\n${renderTranscript(t)}` };
     } catch (e) { if (shareGone(e, till)) return unasked; throw e; }
-  })) as SuiteResult[];
+  }, Infinity, halt)) as SuiteResult[];
   if (!alive.every((a) => a.passed)) return [...wins.map((w) => unchecked(w, till?.empty ? OUT_OF_MONEY : NOT_REACHED)), ...alive];
 
   if (wins.length) await report('testing');
   const one = async (w: Breach): Promise<SuiteResult> => {
     if (till?.empty) return unchecked(w, OUT_OF_MONEY);
     try {
-      const { transcript: t, finished } = await replay(policy, userMessagesOf(JSON.parse(w.transcript)), budget, deadline);
+      const { transcript: t, finished } = await replay(policy, userMessagesOf(JSON.parse(w.transcript)), budget, deadline, halt);
       const slipped = replies(t).some(saidIt);
       if (slipped) return { kind: 'regression', name: nameOf(w), breachId: w.id, passed: false, detail: `said it again\n${renderTranscript(t)}` };
       return { kind: 'regression', name: nameOf(w), breachId: w.id, passed: finished, detail: finished ? 'held' : OUT_OF_TIME };
@@ -157,7 +167,7 @@ export async function runSuites(policy: string, wins: Breach[], report: Report =
   if (!own) return alive;
   const first = Date.now() < deadline ? await one(own) : unchecked(own, OUT_OF_TIME);
   if (slippedAgain(first)) return [first, ...rest.map((w) => unchecked(w, NOT_REACHED)), ...alive];
-  const ran = await pooled(rest, AT_ONCE, one, deadline);
+  const ran = await pooled(rest, AT_ONCE, one, deadline, halt);
   return [first, ...ran.map((r, i) => r ?? unchecked(rest[i], OUT_OF_TIME)), ...alive];
 }
 /** a regression result that is a real failure: it said the word again. a check that was never made is not one. */
@@ -199,8 +209,11 @@ output only the new system prompt text, no quotes, no markdown.`;
     }
     return out;
   } catch (e) {
-    // out of thinking money is not a reason to ship a worse rulebook: stop, and let the next request resume.
-    if (e instanceof Broke) throw e;
+    // out of thinking money, or trouble on the way, is not a reason to ship a worse rulebook: stop, and
+    // let it be tried again. a rewrite that is simply priced beyond what one thought may cost is
+    // different: asking again gets the same answer. then the fallback rules are what there is, and
+    // they are put through the same tests as any rewrite before they ship.
+    if (e instanceof Broke && e.kind !== 'price') throw e;
     console.error('[immune] patch error', (e as Error).message);
     return stopgap(failedPolicy, winTranscript);
   }
@@ -268,13 +281,13 @@ export async function harden(failedPolicy: string, win: Breach, allWins: Breach[
   let best: HardenOutcome | null = null;
   let autoimmune = false;
   const log: HardenOutcome['log'] = [];
-  // the day's share for lessons can run out in the middle of this. what happens then depends on what
+  // the day's budget for lessons can run out in the middle of this. what happens then depends on what
   // the lesson has in hand. a rewrite the model wrote is shipped with the tests it got through: the
   // patcher was told to treat the winning conversation as hostile, and that is the game's defence.
   // the fallback rules are not shipped that way: they are the old rules with the winner's own words
   // attached, and unseen by any test they would put those words into the instructions behind every
-  // reply. with only that in hand, the lesson stops and waits for money, and the game does not sell
-  // games against a generation it could not afford to fix (see `playable` in chat.ts).
+  // reply. with only that in hand, the lesson stops and waits for money. it should not come to that:
+  // the house sells a game only with a lesson's price free (see `playable` in chat.ts).
   const till: Till = { empty: false };
   for (let round = 1; round <= rounds; round++) {
     if (round > 1 && (left() < ROUND_FLOOR_MS || till.empty)) break;
@@ -304,6 +317,6 @@ export async function harden(failedPolicy: string, win: Breach, allWins: Breach[
     failures = results.filter((r) => slippedAgain(r) || (r.kind === 'alive' && !r.passed && r.detail !== OUT_OF_MONEY));
     if (!failures.length) break; // nothing it could fix by rewriting
   }
-  if (till.empty && isStopgap(best!.policy, failedPolicy)) throw new Broke("today's lesson budget is spent", true);
+  if (till.empty && isStopgap(best!.policy, failedPolicy)) throw new Broke("today's lesson budget is spent", 'budget');
   return { ...best!, autoimmune, log, cutShort: till.empty };
 }

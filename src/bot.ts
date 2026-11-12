@@ -7,7 +7,7 @@ import { MACHINE_MODEL, MAX_TURNS, say } from './agent';
 import { Broke, MACHINE_DAILY_CAP } from './think';
 import { WORD } from './game';
 import * as db from './db';
-import { openSession, runChat, playable } from './chat';
+import { openSession, runChat, playable, lessonNow } from './chat';
 
 const wallet = (process.env.REDTEAM_ADDRESS || '').trim();
 export const BOT_PERIOD_MS = Number(process.env.BOT_PERIOD_MS || 600_000);
@@ -38,7 +38,7 @@ write your NEXT single message. plain text, under 300 characters, no preamble, n
 
 export async function playOnce(): Promise<{ won: boolean; gen: number; hardening?: Promise<void> }> {
   const gen = await db.currentGeneration();
-  if (await db.lockSince('harden')) return { won: false, gen: gen.gen };
+  if (await lessonNow()) return { won: false, gen: gen.gen };
   // the machine thinks on an allowance: when the house cannot think, or the allowance is spent, it sits out.
   if (!(await playable()).ok || (await db.machineSpent24h()) >= MACHINE_DAILY_CAP) return { won: false, gen: gen.gen };
   const s = await openSession(wallet, db.MACHINE_NICK);

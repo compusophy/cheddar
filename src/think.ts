@@ -57,7 +57,8 @@ export const MACHINE_DAILY_CAP = num('MACHINE_DAILY_CAP', 0.5);
  * twentieth of a cent and a lesson can cost tens of cents: it rewrites the rules and replays old
  * conversations against them. without a share of its own, a handful of wins in a day spent all of
  * it on lessons and left nothing to reply with, and anyone able to keep winning could do that on
- * purpose for about a nickel a time. past this, a lesson is the short kind that costs nothing.
+ * purpose for about a nickel a time. when it is nearly gone the house stops selling games until it
+ * has room again (see `canLearn`): it does not take a stake it could not afford to learn from losing.
  */
 export const LESSON_DAILY_CAP = num('LESSON_DAILY_CAP', Math.round(THINK_DAILY_CAP * 70) / 100);
 /**
@@ -84,15 +85,24 @@ const reader = createPublicClient({ chain, transport: http(rpc) });
 export const describe = () => ({ url: new URL(THINK_URL).host, network: thinkNetName, payer, keyed: !!API_KEY,
   explorer: thinkNetName === 'mainnet' ? 'https://explore.tempo.xyz' : 'https://explore.moderato.tempo.xyz' });
 
+/**
+ * why a thought was not bought. the four are not interchangeable, and what a lesson does next depends
+ * on which it was:
+ *   asleep   the house cannot pay for this right now: an empty wallet, the day's ceiling reached,
+ *            or a dear thought that costs more than is free. nothing is wrong that money or time
+ *            will not fix: whatever was under way waits.
+ *   budget   the day's budget for this kind of thinking ran out in the act: the ceiling, or a share
+ *            of it. a lesson that has a rewrite in hand ships it with the tests it got through.
+ *   price    the seller made no offer the wallet may accept: dearer than a thought may cost, or in
+ *            a token or on a chain it does not pay in. asking again will get the same answer, so
+ *            the caller does without it.
+ *   trouble  anything else: the seller did not answer, a payment failed, a balance could not be
+ *            read. not a statement about money at all. the caller tries again later.
+ */
+export type BrokeKind = 'asleep' | 'budget' | 'price' | 'trouble';
 /** it could not pay. the caller tells the player nothing was used up. */
 export class Broke extends Error {
-  /**
-   * `shareOnly`: what ran out is one kind of thinking's share of the day (lessons, or the machine),
-   * and nothing else is wrong: the house can still pay for a reply. it is set for that one reason
-   * and no other. a payment that failed, a seller that did not answer or a balance that could not
-   * be read is not "the money ran out", and must not be mistaken for it.
-   */
-  constructor(why: string, readonly shareOnly = false) { super(why); this.name = 'Broke'; }
+  constructor(why: string, readonly kind: BrokeKind = 'trouble') { super(why); this.name = 'Broke'; }
 }
 
 // mppx is published as es modules only, and this project compiles to commonjs: load it on first use.
@@ -156,7 +166,7 @@ export async function spendable(): Promise<{ balance: number; reserved: number; 
  * cannot afford to play, and again before every thought. cached briefly: it is read on every page load.
  */
 /** `wakesIn` is seconds until it can think again, when that is known: a spent daily budget frees up by itself, an empty wallet does not. */
-export type Awake = { ok: boolean; why: string | null; balance: number | null; reserved: number; available: number | null; wakesIn?: number };
+export type Awake = { ok: boolean; why: string | null; balance: number | null; reserved: number; available: number | null; wakesIn?: number; /** the wallet could not be read: not a statement about money. */ unknown?: boolean };
 let last: { at: number; value: Awake } | null = null;
 export async function awake(fresh = false): Promise<Awake> {
   if (!fresh && last && Date.now() - last.at < 20_000) return last.value;
@@ -175,7 +185,7 @@ export async function awake(fresh = false): Promise<Awake> {
     }
   } catch (e) {
     // could not read the balance: say so plainly rather than guess either way.
-    value = { ok: false, why: 'cannot check its thinking money right now', balance: null, reserved: 0, available: null };
+    value = { ok: false, why: 'cannot check its thinking money right now', balance: null, reserved: 0, available: null, unknown: true };
     console.error('[think] awake check failed', (e as Error).message);
   }
   last = { at: Date.now(), value };
@@ -183,21 +193,38 @@ export async function awake(fresh = false): Promise<Awake> {
 }
 
 /**
- * can the house afford to learn from a loss right now? a lesson is not started on less than this:
- * one that runs out of money part-way has paid for work it throws away. it needs that much room in
- * the day's share for lessons, and that much money that is free to think with.
+ * could the house pay for a whole lesson right now?
+ *
+ * this is the question behind every stake. the house does not sell a game it could not afford to
+ * learn from losing: a game against rules that have been beaten and cannot yet be fixed is not the
+ * game. so it asks for the price of a lesson, not of a reply, in three places at once: free in the
+ * wallet, left under the day's ceiling, and (for a lesson that follows a player's win) left in the
+ * day's share for lessons. a lesson is not begun on less either, because one that runs out part-way
+ * has paid for work it throws away. the answer comes with why not, and when, if time will fix it.
+ *
+ * `awake` is the narrower question, asked before each single thought: can this one be paid for.
+ * it reads the wallet; this reads nothing more from the chain, so it cannot fail where `awake` answers.
  */
-export const LESSON_NEED = Math.min(num('LESSON_NEED', 0.5), LESSON_DAILY_CAP);
-export async function canLearn(): Promise<{ ok: boolean; why: string | null; wakesIn?: number }> {
-  const spent = await db.lessonSpent24h();
-  if (spent + LESSON_NEED > LESSON_DAILY_CAP + 1e-9) {
-    const at = await db.lessonFreesAt(LESSON_DAILY_CAP, LESSON_NEED).catch(() => null);
-    return { ok: false, why: "it lost, and today's money for lessons is spent", ...(at ? { wakesIn: Math.max(1, Math.ceil((at.getTime() - Date.now()) / 1000)) } : {}) };
+export const LESSON_NEED = num('LESSON_NEED', 0.5);
+// settings that can never be met are said out loud, once, where the operator will see them: a game
+// that will not sell a single game looks, from outside, exactly like one that is out of money.
+const NEVER_SELLS = LESSON_NEED > Math.min(LESSON_DAILY_CAP, THINK_DAILY_CAP) + 1e-9;
+if (NEVER_SELLS) console.warn(`[think] LESSON_NEED ($${LESSON_NEED}) is more than a day allows (LESSON_DAILY_CAP $${LESSON_DAILY_CAP}, THINK_DAILY_CAP $${THINK_DAILY_CAP}): no game will ever be sold. lower LESSON_NEED or raise the caps.`);
+/** `besides`: money that stops being free the moment a game is lost (the pot's next seed, when the pot and the thinking money are one wallet). */
+export async function canLearn(whose: 'house' | 'machine' = 'house', fresh = false, besides = 0): Promise<Awake> {
+  const a = await awake(fresh);
+  if (!a.ok) return a;
+  const no = (why: string, at?: Date | null): Awake => ({ ...a, ok: false, why, ...(at ? { wakesIn: Math.max(1, Math.ceil((at.getTime() - Date.now()) / 1000)) } : {}) });
+  if (NEVER_SELLS) return no('a lesson is set to cost more than a day of thinking may: its settings need a look');
+  try {
+    if ((await db.thoughtSpent24h()) + LESSON_NEED > THINK_DAILY_CAP + 1e-9) return no("today's thinking budget is nearly spent", await db.thinkingFreesAt(THINK_DAILY_CAP, LESSON_NEED).catch(() => null));
+    if (whose === 'house' && (await db.lessonSpent24h()) + LESSON_NEED > LESSON_DAILY_CAP + 1e-9) return no("today's money for lessons is spent", await db.lessonFreesAt(LESSON_DAILY_CAP, LESSON_NEED).catch(() => null));
+  } catch (e) {
+    console.error('[think] could not check the day\'s budgets', (e as Error).message);
+    return no('cannot check its thinking money right now');
   }
-  if (API_KEY) return { ok: true, why: null };
-  const m = await spendable();
-  if (m.available + 1e-9 < LESSON_NEED) return { ok: false, why: `it lost, and has less than the $${LESSON_NEED.toFixed(2)} it needs free to learn from it` };
-  return { ok: true, why: null };
+  if (a.available !== null && a.available + 1e-9 < LESSON_NEED + besides) return no('too little thinking money left to learn from a loss');
+  return a;
 }
 
 export type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
@@ -242,17 +269,21 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
   let prepared: any;
   try { prepared = await mppx.prepareRequest(THINK_URL, init); }
   catch (e) {
-    // no offer the wallet is allowed to accept: wrong token, wrong chain, or dearer than the ceiling.
-    throw new Broke(`no payable offer from the model: ${(e as Error).message.slice(0, 200)}`);
+    // the seller answered and made no offer the wallet is allowed to accept: wrong token, wrong chain,
+    // or dearer than the ceiling. asking again gets the same answer. anything else that goes wrong
+    // here (no answer at all, a timeout) is trouble on the way, and may be gone the next time.
+    const msg = (e as Error).message || '';
+    throw new Broke(`no payable offer from the model: ${msg.slice(0, 200)}`, /no method found/i.test(msg) ? 'price' : 'trouble');
   }
   if (!prepared.payment) return { res: prepared.response, paid: false, sellerFailed: false, cost: 0, tx: null };
   // the same question the game asks before it takes a stake, asked again before every payment: a
   // game already under way does not get to think with money that is promised to a winner.
   const up = await awake();
-  if (!up.ok) throw new Broke(up.why || 'asleep');
+  // a wallet that could not be read is trouble on the way, not an empty wallet: a lesson must not take it for the money running out.
+  if (!up.ok) throw new Broke(up.why || 'asleep', up.unknown ? 'trouble' : 'asleep');
   const price = amountOf(prepared.payment.challenge);
   const ceiling = a.maxPrice ?? THINK_MAX_PRICE;
-  if (!(price > 0) || price > ceiling) throw new Broke(`a thought was quoted at $${price}; the ceiling is $${ceiling}`);
+  if (!(price > 0) || price > ceiling) throw new Broke(`a thought was quoted at $${price}; the ceiling is $${ceiling}`, 'price');
   // being awake means there is at least the floor to think with, which covers a reply many times
   // over. a dear thought (the rule rewrite after a loss) can cost more than the floor, and paying
   // it then would come out of the pot or a prize still owed. it is checked against what is free.
@@ -260,10 +291,10 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
     const m = await spendable().catch(() => null);
     last = null; // what is free is about to change by more than a rounding, or could not be read: look again next time
     if (!m) throw new Broke('cannot check what is free to think with right now');
-    if (price > m.available + 1e-9) throw new Broke(`a thought at $${price} is more than the $${m.available} that is free to think with`);
+    if (price > m.available + 1e-9) throw new Broke(`a thought at $${price} is more than the $${m.available} that is free to think with`, 'asleep');
   }
   const rsv = await db.reserveThought(a.purpose, a.model, price, THINK_DAILY_CAP, shareOf(a.purpose));
-  if (!rsv.ok) throw new Broke(rsv.why, rsv.share === true);
+  if (!rsv.ok) throw new Broke(rsv.why, 'budget'); // the day's ceiling, or this kind of thinking's share of it
   let res: Response;
   try { res = await prepared.payment.pay(mode ? { mode } : undefined); }
   catch (e) {

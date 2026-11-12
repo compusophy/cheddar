@@ -9,7 +9,7 @@ import { MAX_TURNS, MAX_MESSAGE_CHARS, MODEL } from './agent';
 import * as think from './think';
 import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED, GRANT, GRANTS_PER_DAY, GRANTS_PER_VISITOR, DAILY_CAP, PURSE_DAILY_CAP } from './game';
 import { network } from './visitor';
-import { openSession, runChat, peek, abandon, resumeHardening, settleUnpaid, playable } from './chat';
+import { openSession, runChat, peek, abandon, resumeHardening, settleUnpaid, playable, lessonNow } from './chat';
 import * as treasury from './treasury';
 import * as bot from './bot';
 import { net, flag } from './net';
@@ -66,9 +66,9 @@ const STATE_MS = 2000;
 let stateKept: { at: number; stamp: number; body: unknown } | null = null;
 let stateMaking: Promise<unknown> | null = null;
 async function makeState() {
-  const [gen, phase, up, pot, machine] = await Promise.all([db.currentGeneration(), db.lockPhase('harden'), playable(), db.jackpot(), db.machinePulse()]);
+  const [gen, lesson, up, reply, unlearned, pot, machine] = await Promise.all([db.currentGeneration(), lessonNow(), playable(), think.awake(), db.unfinishedWin(), db.jackpot(), db.machinePulse()]);
   return {
-    gen: gen.gen, policy: gen.policy, learning: phase ? { phase: /^\d+$/.test(phase) ? 'reading the conversation that beat it' : phase } : null,
+    gen: gen.gen, policy: gen.policy, learning: lesson ? { phase: lesson.phase } : null,
     word: WORD, stake: STAKE, grant: GRANT, jackpot: pot, seed: JACKPOT_SEED, share: JACKPOT_SHARE,
     // the page is told the network's public endpoint, never the one this server uses: TEMPO_RPC may be
     // a private one with a key in its address, and this answer is handed to every visitor.
@@ -76,8 +76,11 @@ async function makeState() {
     // real: the dollars are worth dollars. the page uses it to stop offering a welcome grant and to
     // show how to add money instead. closed: the operator has stopped new games (open ones play out).
     network: net.name, real: net.real, closed: flag('CLOSED'),
-    // awake: the house can pay for the ai's next thought. when it cannot, the page takes no stake.
-    awake: up.ok, asleep: up.ok ? null : up.why, ...(up.wakesIn ? { wakes_in: up.wakesIn } : {}), model: MODEL, thinks: think.describe(),
+    // awake: the house is selling games, which takes the price of a lesson, not only of a reply. when
+    // it is not, the page takes no stake. answers: a message in a game that is already open would be
+    // answered: there is money for a reply, and no lost game waiting to be learned from. the two
+    // differ when there is money for thoughts and not for a lesson.
+    awake: up.ok, asleep: up.ok ? null : up.why, ...(up.wakesIn ? { wakes_in: up.wakesIn } : {}), answers: reply.ok && !unlearned, model: MODEL, thinks: think.describe(),
     max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
     machine,
   };

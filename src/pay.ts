@@ -20,7 +20,7 @@ import * as treasury from './treasury';
 import * as think from './think';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 import { WORD, STAKE, JACKPOT_SHARE } from './game';
-import { openPaidSession, runChat, carryOn, playable } from './chat';
+import { openPaidSession, runChat, carryOn, playable, lessonNow, lessonLine } from './chat';
 import { net, flag } from './net';
 
 const chain = net.real ? tempoMainnet : tempoModerato;
@@ -279,12 +279,18 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       // moved, so the game is theirs, exactly as a stake that has left a purse always becomes a game.
       const moved = movedAlready(Credential, request);
       if (elsewhere && !moved) return res.status(400).json({ error: '"address" is not taken: a game is played by, and its prize paid to, the wallet that pays for it. leave it out. nothing was charged.' });
-      const [up, learning] = await Promise.all([playable(), db.lockSince('harden')]);
-      if (!moved && !up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true, ...(up.wakesIn ? { retry_after: up.wakesIn } : {}) });
-      if (!moved && learning) return res.status(503).json({ error: 'it is learning from a win. nothing was charged. try again in a minute.', retry_after: 30 });
-      // a game the ai's learning cut short: its session id buys back the messages that were left. no charge.
+      const [up, learning] = await Promise.all([playable(), lessonNow()]);
+      // a lesson is said first: the money it is spending can make the house look asleep meanwhile. it
+      // may be running, due, or waiting its turn after a failed try: the answer says how long.
+      if (!moved && learning) return res.status(503).json({ error: `${lessonLine(learning)}. nothing was charged.`, learning: true, retry_after: learning.retryIn });
+      // a game the ai's learning cut short: its session id buys back the messages that were left. no
+      // charge, and it is not a game being sold: it needs a reply to be affordable, not a lesson.
+      // (unless a lost game is waiting for lesson money: then nobody plays this generation at all.)
       const prior = req.body?.session;
-      if (prior !== undefined && prior !== null && prior !== '') {
+      const carrying = prior !== undefined && prior !== null && prior !== '';
+      const can = carrying && !(await db.unfinishedWin()) ? await think.awake() : up;
+      if (!moved && !can.ok) return res.status(503).json({ error: `it is asleep: ${can.why}. nothing was charged.`, asleep: true, ...(can.wakesIn ? { retry_after: can.wakesIn } : {}) });
+      if (carrying) {
         const c = await carryOn(String(prior));
         if (!c) return res.status(409).json({ error: 'that game has nothing to carry over. leave "session" out to buy a new one.' });
         return res.json({ ok: true, carried: true, session: c.session, generation: c.gen, pot: c.jackpot, turns_left: c.turnsLeft, playing_as: c.player,
@@ -322,7 +328,7 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
         goal: `get it to say "${WORD}". its rules: ${base}/api/state`,
         // seated because the payment had already been made, at a moment the game would otherwise have said no.
         ...(moved && learning ? { note: 'your payment had already been made, so the game is yours. it is learning from a win right now: when it has, this game is carried over to the new rules at no charge (the answer to your next message says how).' }
-          : moved && !up.ok ? { note: `your payment had already been made, so the game is yours. it is asleep right now (${up.why}): a message sent while it is asleep is refused and uses none of your turns.` }
+          : moved && !up.ok ? { note: `your payment had already been made, so the game is yours. it is asleep right now (${up.why}) and selling no new games. a message it cannot pay to answer is refused and uses none of your turns.` }
           : moved && flag('CLOSED') ? { note: 'your payment had already been made, so the game is yours, though no new games are being sold right now.' } : {}),
         ...(elsewhere ? { about_address: '"address" is not taken: this game is played by, and its prize is paid to, the wallet that paid.' } : {}),
       })));
@@ -345,6 +351,8 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
         if (r.body?.carry) return res.status(r.status).json({ error: r.body.error, carry: { turns_left: r.body.carry.turnsLeft, how: { method: 'POST', url: `${origin(req)}/api/agent/play`, body: { session: String(session) } } } });
         // busy: the message did not count. say how long to wait, in the words the rest of this door uses.
         if (r.status === 429 && r.body?.retryIn) return res.status(429).json({ error: r.body.error, why: r.body.why, retry_after: r.body.retryIn, note: 'that message did not count and used none of your turns. wait retry_after seconds and send it again.' });
+        // learning: a minute. asleep: as long as the game says, when it knows.
+        if (r.status === 503 && r.body?.learning) return res.status(503).json({ ...r.body, retry_after: r.body.retry_after ?? 30, note: 'that message did not count. when the lesson is over this game is carried over to the new rules at no charge: the answer to your next message says how.' });
         return res.status(r.status).json(r.body);
       }
       const won = !!r.body.win;
