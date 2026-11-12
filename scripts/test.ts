@@ -108,9 +108,10 @@ async function main() {
   check('what was reserved counts as spent', Math.abs((await db.thoughtSpent24h()) - (spentBefore + 0.02)) < 1e-9);
   const machineBefore = await db.thoughtSpent24h('machine');
   const machineAllBefore = await db.machineSpent24h();
-  const m1 = await db.reserveThought('machine', 'test-model', 0.004, 1000, machineBefore + 0.005);
+  const pocket = { purposes: ['machine'], cap: machineBefore + 0.005, name: 'machine' };
+  const m1 = await db.reserveThought('machine', 'test-model', 0.004, 1000, pocket);
   check('the machine thinks on its own allowance', m1.ok, JSON.stringify(m1));
-  const m2 = await db.reserveThought('machine', 'test-model', 0.004, 1000, machineBefore + 0.005);
+  const m2 = await db.reserveThought('machine', 'test-model', 0.004, 1000, pocket);
   check('and stops when the allowance is gone, however much the house has left', !m2.ok && /machine/.test((m2 as any).why), JSON.stringify(m2));
   const c1 = await db.reserveThought('chat', 'test-model', 0.004, 1000);
   check('a player\'s thought is not held back by the machine\'s allowance', c1.ok, JSON.stringify(c1));
@@ -118,6 +119,17 @@ async function main() {
   check('a lesson from the machine\'s win is never refused for the allowance', l1.ok, JSON.stringify(l1));
   check('but it counts towards what the machine has cost today', Math.abs((await db.machineSpent24h()) - (machineAllBefore + 0.004 + 0.003)) < 1e-9, String(await db.machineSpent24h()));
   if (l1.ok) await db.releaseThought(l1.id);
+  // lessons after players' wins have a share of the day too: rewriting, replaying and noting the lesson, counted together.
+  const lessonsBefore = (await db.thoughtSpent24h('patch')) + (await db.thoughtSpent24h('test')) + (await db.thoughtSpent24h('lesson'));
+  const forLessons = { purposes: ['patch', 'test', 'lesson'], cap: lessonsBefore + 0.005, name: 'lesson' };
+  const s1 = await db.reserveThought('test', 'test-model', 0.003, 1000, forLessons);
+  const s2 = await db.reserveThought('patch', 'test-model', 0.003, 1000, forLessons);
+  check('a lesson thinks on the day\'s share for lessons, whichever part of the lesson it is', s1.ok && !s2.ok && (s2 as any).share === true && /lesson/.test((s2 as any).why), JSON.stringify([s1, s2]));
+  const c2 = await db.reserveThought('chat', 'test-model', 0.003, 1000);
+  check('and a reply to a player is not held back when that share is gone', c2.ok, JSON.stringify(c2));
+  const dayGone = await db.reserveThought('test', 'test-model', 0.003, (await db.thoughtSpent24h()) + 0.001, { ...forLessons, cap: 1000 });
+  check('running out of the whole day is not the same thing as running out of a share', !dayGone.ok && (dayGone as any).share === undefined, JSON.stringify(dayGone));
+  for (const t of [s1, s2, c2]) if (t.ok) await db.releaseThought(t.id);
   if (t1.ok) await db.settleThought(t1.id, '0x' + '0a'.repeat(32));
   check('a settled thought shows up in the public list with its payment', (await db.recentThoughts(50)).some((t) => t.tx_hash === '0x' + '0a'.repeat(32)));
   for (const t of [t1, t2, m1, c1]) if (t.ok) await db.releaseThought(t.id);

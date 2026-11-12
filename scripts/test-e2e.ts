@@ -116,8 +116,9 @@ async function main() {
   const common = { DATABASE_URL: DB, POSTGRES_URL: DB, DB_POOL: '1', NETWORK: 'testnet', AGENT_PRIVATE_KEY: houseKey, THINK_KEY: '', THINK_API_KEY: '', TOKEN_ADDRESS: '', TOKEN_SYMBOL: '' };
   start('seller', 'scripts/seller.ts', { ...common, SELLER_PORT: String(SELLER_PORT), SELLER_SPONSOR: '1' });
   await until('the stand-in model', async () => (await fetch(`http://localhost:${SELLER_PORT}/`)).ok, 120_000);
-  start('game', 'src/server.ts', { ...common, PORT: String(PORT), ADMIN_TOKEN: ADMIN, BOT: '0', REDTEAM_ADDRESS: machine, CLOSED: '', PAYOUTS_OFF: '', GRANTS_PER_VISITOR: '3', GRANTS_PER_DAY: '',
-    THINK_URL: `http://localhost:${SELLER_PORT}/v1/chat/completions`, THINK_NETWORK: 'testnet', THINK_MODE: '', MODEL: '', PATCH_MODEL: '', LESSON_SECONDS: '' });
+  const gameEnv = { ...common, PORT: String(PORT), ADMIN_TOKEN: ADMIN, BOT: '0', REDTEAM_ADDRESS: machine, CLOSED: '', PAYOUTS_OFF: '', GRANTS_PER_VISITOR: '3', GRANTS_PER_DAY: '',
+    THINK_URL: `http://localhost:${SELLER_PORT}/v1/chat/completions`, THINK_NETWORK: 'testnet', THINK_MODE: '', MODEL: '', PATCH_MODEL: '', LESSON_SECONDS: '', LESSON_DAILY_CAP: '', THINK_DAILY_CAP: '' };
+  start('game', 'src/server.ts', gameEnv);
   await until('the game', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
   if (Date.now() - oldStakeAt < 25_000) await nap(25_000 - (Date.now() - oldStakeAt)); // the old stake has to be plainly older than the ledger about to begin
   const wiped = await fetch(BASE + '/api/admin/reset', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } });
@@ -362,6 +363,29 @@ async function main() {
   check('eight players in eight games, all at the same moment: eight replies', chorus.every((r) => r.status === 200), `${chorus.map((r) => r.status)} ${chorus.find((r) => r.status !== 200)?.error ?? ''}`);
   const bought = new Set(chorus.map((r) => String(r.turns?.[1]?.paid?.tx || '').toLowerCase()).filter((t) => /^0x[0-9a-f]{64}$/.test(t)));
   check('each bought with a payment of its own', bought.size === 8, `${bought.size} distinct payments`);
+
+  console.log('the day\x27s money for lessons runs out');
+  // a second copy of the game on the same ledger, as another instance would be, with next to nothing set
+  // aside for lessons: today's lessons have cost more than that already. a win must still be a win, the
+  // game must still go on, and the winner must still be paid. only the learning is the short kind.
+  const BASE2 = `http://localhost:${PORT + 1}`;
+  start('game2', 'src/server.ts', { ...gameEnv, PORT: String(PORT + 1), LESSON_DAILY_CAP: '0.0001' });
+  await until('the second copy of the game', async () => (await fetch(BASE2 + '/api/health')).ok, 120_000);
+  const lessonCost = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS t FROM thoughts WHERE purpose IN ('patch', 'test', 'lesson')`)[0].t);
+  const poor = await playing('poor');
+  const before2 = { pot: (await api('/state')).jackpot, bal: await poor.balance(), gen: (await api('/state')).gen, lessons: await lessonCost() };
+  const r2 = await fetch(BASE2 + '/api/chat', { method: 'POST', headers: J, body: JSON.stringify({ session: poor.session, message: trick() }) });
+  const won2 = await r2.json() as any;
+  check('a win is still a win', r2.status === 200 && !!won2.win && near(won2.win.prize, before2.pot), JSON.stringify(won2.win));
+  const after2 = await learned(before2.gen);
+  const newest2 = (await api('/history')).generations.slice(-1)[0];
+  check('the game goes on to the next generation, with rules it could not test, and says so', after2.gen === before2.gen + 1 && newest2.regression_passed === 0 && /no money for lessons left/.test(newest2.lesson || ''), JSON.stringify({ gen: after2.gen, reg: newest2.regression_passed, lesson: newest2.lesson }));
+  check('that lesson cost nothing', near(await lessonCost(), before2.lessons), String((await lessonCost()) - before2.lessons));
+  await until('the prize to arrive', async () => (await poor.balance()) > before2.bal + before2.pot - 0.01);
+  check('and the winner is paid all the same', near(await poor.balance(), before2.bal + before2.pot), String((await poor.balance()) - before2.bal));
+  const onward = await playing('onward');
+  check('the next game plays', (await say(onward.session, 'hello')).status === 200);
+  await post('/abandon', { session: onward.session });
 
   console.log('the books add up');
   b = await books();

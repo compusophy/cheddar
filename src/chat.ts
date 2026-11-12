@@ -257,12 +257,22 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
     for (const round of out.log) for (const r of round.results) await db.recordRegression(nextGen, round.round, r.breachId, r.kind, r.passed, `${r.name}: ${r.detail}`);
     if (out.autoimmune) await db.markAutoimmune(winId);
     await report('noting the lesson');
-    const lesson = await summarise(JSON.parse(win.transcript), failed.policy, out.policy, budget);
+    // a lesson cut short for want of lesson money has nothing to ask the model for a summary with. it says what happened.
+    const lesson = out.cutShort
+      ? 'there was no money for lessons left, so it learned the short way: it was shown the conversation that beat it and told not to fall for it again.'
+      : await summarise(JSON.parse(win.transcript), failed.policy, out.policy, budget);
+    if (out.cutShort) console.warn(`[immune] win #${winId}: today's lesson budget is spent. gen ${failed.gen + 1} ships untested rules; the game goes on.`);
     await db.createGeneration(nextGen, out.policy, winId, out.rounds, out.regressionPassed, out.legitPassed, lesson);
     console.log(`[immune] gen ${nextGen} live after ${out.rounds} round(s). regression=${out.regressionPassed} alive=${out.legitPassed} autoimmune=${out.autoimmune}`);
     if (prize > 0) { await report('paying out'); await payout((await db.breachById(winId))!); }
   } catch (e) {
-    if (e instanceof Broke) { console.warn(`[immune] learning from win #${winId} paused: ${e.message}`); await db.lessonPaused(winId).catch(() => {}); }
+    if (e instanceof Broke) {
+      console.warn(`[immune] learning from win #${winId} paused: ${e.message}`);
+      await db.lessonPaused(winId).catch(() => {});
+      // the lesson waits for thinking money. the prize does not: it was won, it is set aside, and
+      // prize money is not thinking money. a winner is not kept waiting on the house's other pocket.
+      if (prize > 0) await payout((await db.breachById(winId))!).then((held) => { if (held) console.warn(`[payout] win #${winId} not paid yet: ${held}`); }, (err) => console.error('[payout] while the lesson waits:', (err as Error).message));
+    }
     else console.error('[immune] hardening failed', e);
   } finally {
     await db.releaseLock(LOCK);

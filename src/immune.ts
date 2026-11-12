@@ -10,7 +10,7 @@
  */
 import { PATCH_MODEL, PATCH_TOKENS, write, step, renderTranscript, type Turn } from './agent';
 import { num } from './net';
-import { Broke } from './think';
+import { Broke, awake } from './think';
 import { WORD, about, saidIt } from './game';
 import type { Breach } from './db';
 
@@ -96,6 +96,22 @@ const replies = (t: Turn[]) => t.filter((x) => x.role === 'agent').map((x) => x.
 type Report = (phase: string) => Promise<unknown> | void;
 const OUT_OF_TIME = 'not checked: the lesson ran out of time';
 const NOT_REACHED = 'not checked: an earlier check had already failed';
+const OUT_OF_MONEY = 'not checked: there was no money left for this lesson';
+/**
+ * a lesson's till. it goes empty when the lesson can no longer pay for its own thinking while the
+ * house can still pay for a reply: the day's share for lessons is spent, or one thought (the rule
+ * rewrite) costs more than is free. from then on the lesson asks the model nothing more, and what it
+ * has is what it ships. a lesson that waited for money instead would hold up every player's game
+ * while the house was still able to play. (a house that cannot pay for a reply either is a different
+ * thing and is not caught here: nobody is playing, and that lesson waits for money.)
+ */
+export type Till = { empty: boolean };
+async function shareGone(e: unknown, till?: Till): Promise<boolean> {
+  if (!till || !(e instanceof Broke)) return false;
+  if (!e.shareOnly && !(await awake(true).then((a) => a.ok, () => false))) return false;
+  till.empty = true;
+  return true;
+}
 /**
  * the suites, cheapest and most telling first, and nothing is paid for once the answer is known.
  * every replay is a paid reply, and a full pass is a hundred of them or more, so the order matters:
@@ -107,24 +123,31 @@ const NOT_REACHED = 'not checked: an earlier check had already failed';
  *
  * a conversation that was not replayed to the end is recorded as not checked, never as held.
  */
-export async function runSuites(policy: string, wins: Breach[], report: Report = () => {}, budget: Budget = 'house', deadline = Infinity): Promise<SuiteResult[]> {
+export async function runSuites(policy: string, wins: Breach[], report: Report = () => {}, budget: Budget = 'house', deadline = Infinity, till?: Till): Promise<SuiteResult[]> {
   const nameOf = (w: Breach) => `win #${w.id} (gen ${w.gen})`;
   const unchecked = (w: Breach, why: string): SuiteResult => ({ kind: 'regression', name: nameOf(w), breachId: w.id, passed: false, detail: why });
   await report('checking it can still talk');
   const alive = (await pooled(ALIVE, AT_ONCE, async (a): Promise<SuiteResult> => {
-    const { transcript: t } = await replay(policy, a.messages, budget);
-    const rs = replies(t);
-    const ok = rs.every(engaged) && !rs.some(saidIt);
-    return { kind: 'alive', name: a.name, breachId: null, passed: ok, detail: ok ? 'engaged' : `${rs.some(saidIt) ? 'said it' : 'clammed up'}\n${renderTranscript(t)}` };
+    const unasked: SuiteResult = { kind: 'alive', name: a.name, breachId: null, passed: false, detail: OUT_OF_MONEY };
+    if (till?.empty) return unasked;
+    try {
+      const { transcript: t } = await replay(policy, a.messages, budget);
+      const rs = replies(t);
+      const ok = rs.every(engaged) && !rs.some(saidIt);
+      return { kind: 'alive', name: a.name, breachId: null, passed: ok, detail: ok ? 'engaged' : `${rs.some(saidIt) ? 'said it' : 'clammed up'}\n${renderTranscript(t)}` };
+    } catch (e) { if (await shareGone(e, till)) return unasked; throw e; }
   })) as SuiteResult[];
-  if (!alive.every((a) => a.passed)) return [...wins.map((w) => unchecked(w, NOT_REACHED)), ...alive];
+  if (!alive.every((a) => a.passed)) return [...wins.map((w) => unchecked(w, till?.empty ? OUT_OF_MONEY : NOT_REACHED)), ...alive];
 
   if (wins.length) await report('testing');
   const one = async (w: Breach): Promise<SuiteResult> => {
-    const { transcript: t, finished } = await replay(policy, userMessagesOf(JSON.parse(w.transcript)), budget, deadline);
-    const slipped = replies(t).some(saidIt);
-    if (slipped) return { kind: 'regression', name: nameOf(w), breachId: w.id, passed: false, detail: `said it again\n${renderTranscript(t)}` };
-    return { kind: 'regression', name: nameOf(w), breachId: w.id, passed: finished, detail: finished ? 'held' : OUT_OF_TIME };
+    if (till?.empty) return unchecked(w, OUT_OF_MONEY);
+    try {
+      const { transcript: t, finished } = await replay(policy, userMessagesOf(JSON.parse(w.transcript)), budget, deadline);
+      const slipped = replies(t).some(saidIt);
+      if (slipped) return { kind: 'regression', name: nameOf(w), breachId: w.id, passed: false, detail: `said it again\n${renderTranscript(t)}` };
+      return { kind: 'regression', name: nameOf(w), breachId: w.id, passed: finished, detail: finished ? 'held' : OUT_OF_TIME };
+    } catch (e) { if (await shareGone(e, till)) return unchecked(w, OUT_OF_MONEY); throw e; }
   };
   const [own, ...rest] = wins;
   if (!own) return alive;
@@ -134,7 +157,7 @@ export async function runSuites(policy: string, wins: Breach[], report: Report =
   return [first, ...ran.map((r, i) => r ?? unchecked(rest[i], OUT_OF_TIME)), ...alive];
 }
 /** a regression result that is a real failure: it said the word again. a check that was never made is not one. */
-function slippedAgain(r: SuiteResult) { return r.kind === 'regression' && !r.passed && r.detail !== OUT_OF_TIME && r.detail !== NOT_REACHED; }
+function slippedAgain(r: SuiteResult) { return r.kind === 'regression' && !r.passed && r.detail !== OUT_OF_TIME && r.detail !== NOT_REACHED && r.detail !== OUT_OF_MONEY; }
 
 /** the patcher. say cheese's hardenSystemPrompt, kept close to the original. */
 export async function patch(failedPolicy: string, winTranscript: Turn[], priorFailures: SuiteResult[], budget: Budget = 'house'): Promise<string> {
@@ -208,7 +231,8 @@ in ONE sentence, under 20 words, say what it learned. name the trick that beat i
   } catch { return null; }
 }
 
-export type HardenOutcome = { policy: string; rounds: number; regressionPassed: boolean; legitPassed: boolean; autoimmune: boolean; log: { round: number; results: SuiteResult[] }[] };
+/** `cutShort`: the day's money for lessons ran out before this one could be finished, and it shipped what it had. */
+export type HardenOutcome = { policy: string; rounds: number; regressionPassed: boolean; legitPassed: boolean; autoimmune: boolean; log: { round: number; results: SuiteResult[] }[]; cutShort?: boolean };
 export type HardenOptions = {
   /**
    * when the lesson has to be over, as a clock time. a lesson runs inside a function with a hard
@@ -240,29 +264,36 @@ export async function harden(failedPolicy: string, win: Breach, allWins: Breach[
   let best: HardenOutcome | null = null;
   let autoimmune = false;
   const log: HardenOutcome['log'] = [];
+  // the day's share for lessons can run out before this one starts, or in the middle of it. either
+  // way the lesson is not abandoned and the game does not stop: nothing more is asked of the model,
+  // and it ships the best rules it has. with none tested yet, that is the old rules with the losing
+  // conversation attached, which costs nothing to write.
+  const till: Till = { empty: false };
   for (let round = 1; round <= rounds; round++) {
-    if (round > 1 && left() < ROUND_FLOOR_MS) break;
+    if (round > 1 && (left() < ROUND_FLOOR_MS || till.empty)) break;
     await report(round === 1 ? 'writing new rules' : 'rewriting');
     let candidate: string;
     try { candidate = await within(patch(failedPolicy, winTranscript, failures, budget), left() - 15_000); }
     catch (e) {
-      if (!(e instanceof TimeUp)) throw e;
+      if (!(e instanceof TimeUp) && !(await shareGone(e, till))) throw e;
       if (best) break; // a tested candidate already exists; keep it
       candidate = stopgap(failedPolicy, winTranscript);
     }
-    const results = await runSuites(candidate, suite, report, budget, deadline);
+    const results = await runSuites(candidate, suite, report, budget, deadline, till);
     log.push({ round, results });
     const own = results.find((r) => r.kind === 'regression' && r.breachId === win.id);
     const regressionPassed = !results.some(slippedAgain) && !!own?.passed;
-    const legitPassed = results.filter((r) => r.kind === 'alive').every((r) => r.passed);
-    if (round === 1 && !legitPassed) autoimmune = true;
+    const talk = results.filter((r) => r.kind === 'alive');
+    const legitPassed = talk.every((r) => r.passed);
+    // "it can no longer hold a conversation" is a finding about the rules. "it was never asked" is not.
+    if (round === 1 && !legitPassed && talk.some((r) => !r.passed && r.detail !== OUT_OF_MONEY)) autoimmune = true;
     const score = (regressionPassed ? 2 : 0) + (legitPassed ? 1 : 0);
     const bestScore = best ? (best.regressionPassed ? 2 : 0) + (best.legitPassed ? 1 : 0) : -1;
     if (score > bestScore) best = { policy: candidate, rounds: round, regressionPassed, legitPassed, autoimmune, log };
     if (regressionPassed && legitPassed) break;
     // only what actually went wrong is handed back to the patcher. "ran out of time" is not a flaw in the rules.
-    failures = results.filter((r) => slippedAgain(r) || (r.kind === 'alive' && !r.passed));
+    failures = results.filter((r) => slippedAgain(r) || (r.kind === 'alive' && !r.passed && r.detail !== OUT_OF_MONEY));
     if (!failures.length) break; // nothing it could fix by rewriting
   }
-  return { ...best!, autoimmune, log };
+  return { ...best!, autoimmune, log, cutShort: till.empty };
 }

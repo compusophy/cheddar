@@ -52,6 +52,24 @@ export const PATCH_MAX_PRICE = num('PATCH_MAX_PRICE', 0.25);
 export const THINK_DAILY_CAP = num('THINK_DAILY_CAP', 5);
 /** the machine plays free and wins nothing, so its thinking is pure cost. this is its allowance. */
 export const MACHINE_DAILY_CAP = num('MACHINE_DAILY_CAP', 0.5);
+/**
+ * what the lessons after players' wins may cost in a day, out of the daily ceiling. a reply costs a
+ * twentieth of a cent and a lesson can cost tens of cents: it rewrites the rules and replays old
+ * conversations against them. without a share of its own, a handful of wins in a day spent all of
+ * it on lessons and left nothing to reply with, and anyone able to keep winning could do that on
+ * purpose for about a nickel a time. past this, a lesson is the short kind that costs nothing.
+ */
+export const LESSON_DAILY_CAP = num('LESSON_DAILY_CAP', Math.round(THINK_DAILY_CAP * 70) / 100);
+/**
+ * which share of the day a thought is counted against, if any. a reply to a player is counted
+ * against none, only the day's ceiling. so is a lesson from one of the machine's wins: the machine
+ * stops playing once its games and lessons together have cost its allowance, so there is at most one
+ * such lesson past it, and that one is finished properly rather than cut short.
+ */
+const shareOf = (purpose: string): db.Share | undefined =>
+  purpose === 'machine' ? { purposes: ['machine'], cap: MACHINE_DAILY_CAP, name: 'machine' }
+    : purpose === 'patch' || purpose === 'test' || purpose === 'lesson' ? { purposes: ['patch', 'test', 'lesson'], cap: LESSON_DAILY_CAP, name: 'lesson' }
+      : undefined;
 /** below this the house is treated as unable to think, and no new stake is taken. */
 const FLOOR = num('THINK_FLOOR', 0.05);
 /** a plain bearer key, for an endpoint that is not paid per call. unset in the normal setup. */
@@ -67,7 +85,10 @@ export const describe = () => ({ url: new URL(THINK_URL).host, network: thinkNet
   explorer: thinkNetName === 'mainnet' ? 'https://explore.tempo.xyz' : 'https://explore.moderato.tempo.xyz' });
 
 /** it could not pay. the caller tells the player nothing was used up. */
-export class Broke extends Error { constructor(why: string) { super(why); this.name = 'Broke'; } }
+export class Broke extends Error {
+  /** `shareOnly`: what ran out is one kind of thinking's share of the day (lessons, or the machine). the house can still pay for a reply. */
+  constructor(why: string, readonly shareOnly = false) { super(why); this.name = 'Broke'; }
+}
 
 // mppx is published as es modules only, and this project compiles to commonjs: load it on first use.
 type Loaded = { mppx: any; Receipt: any };
@@ -217,8 +238,8 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
     if (price > m.available + 1e-9) { last = null; throw new Broke(`a thought at $${price} is more than the $${m.available} that is free to think with`); }
     last = null; // and what is free is about to change by more than a rounding: look again next time
   }
-  const rsv = await db.reserveThought(a.purpose, a.model, price, THINK_DAILY_CAP, a.purpose === 'machine' ? MACHINE_DAILY_CAP : undefined);
-  if (!rsv.ok) throw new Broke(rsv.why);
+  const rsv = await db.reserveThought(a.purpose, a.model, price, THINK_DAILY_CAP, shareOf(a.purpose));
+  if (!rsv.ok) throw new Broke(rsv.why, rsv.share === true);
   let res: Response;
   try { res = await prepared.payment.pay(mode ? { mode } : undefined); }
   catch (e) {

@@ -230,14 +230,19 @@ export const owedTo = async (player: string) =>
  * last of the day's allowance. `cap` is the whole house's limit; `purposeCap` is a tighter one for a
  * single purpose (the machine has its own pocket money). returns the row to settle, or why not.
  */
-export async function reserveThought(purpose: string, model: string, amount: number, cap: number, purposeCap?: number): Promise<{ ok: true; id: number } | { ok: false; why: string }> {
+export type Share = { purposes: string[]; cap: number; name: string };
+export async function reserveThought(purpose: string, model: string, amount: number, cap: number, share?: Share): Promise<{ ok: true; id: number } | { ok: false; why: string; share?: true }> {
   return sql.begin(async (tx) => {
     await tx`LOCK TABLE thoughts IN SHARE ROW EXCLUSIVE MODE`;
     const [g] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM thoughts WHERE created_at > now() - interval '1 day'`;
     if (Number(g.total) + amount > cap + 1e-9) return { ok: false as const, why: "today's thinking budget is spent" };
-    if (purposeCap !== undefined) {
-      const [p] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM thoughts WHERE purpose = ${purpose} AND created_at > now() - interval '1 day'`;
-      if (Number(p.total) + amount > purposeCap + 1e-9) return { ok: false as const, why: `today's ${purpose} budget is spent` };
+    // a share of the day's budget kept for one kind of thinking (the machine's games and lessons; the
+    // lessons that follow players' wins). it is counted over everything in the share, so one kind
+    // cannot spend what the day has for the rest. `share: true` tells the caller it was only this
+    // share that ran out: the house can still think, just not about this.
+    if (share) {
+      const [p] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM thoughts WHERE purpose IN ${tx(share.purposes)} AND created_at > now() - interval '1 day'`;
+      if (Number(p.total) + amount > share.cap + 1e-9) return { ok: false as const, why: `today's ${share.name} budget is spent`, share: true as const };
     }
     const [row] = await tx<{ id: number }[]>`INSERT INTO thoughts (purpose, model, amount) VALUES (${purpose}, ${model}, ${amount}) RETURNING id`;
     return { ok: true as const, id: row.id };
