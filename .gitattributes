@@ -1,0 +1,3 @@
+# the vendored browser library is the published build, byte for byte, and a test checks its hash.
+# git must not rewrite its line endings on the way in or out.
+public/vendor/*.js -text

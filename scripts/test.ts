@@ -2,6 +2,9 @@
 import dotenv from 'dotenv';
 dotenv.config({ path: '.env.local' });
 dotenv.config();
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
 import * as db from '../src/db';
 import { DAILY_CAP, JACKPOT_SEED, saidIt } from '../src/game';
 import { suiteFor, pooled, REGRESSION_MAX } from '../src/immune';
@@ -217,6 +220,18 @@ async function main() {
   check('nine at once against a share of two (one already used): one more gets through', rush.filter((x) => x === null).length === 1 && rush.filter((x) => x?.bucket === mineB).length === 8, JSON.stringify(rush.map((x) => x?.bucket ?? 'ok')));
   check('and the shared one counted only that one', (await hitsIn(allB)) === 1, String(await hitsIn(allB)));
   await db.sql`DELETE FROM rate_hits WHERE bucket IN (${mineB}, ${allB})`;
+
+  console.log('the page runs no code from anyone else');
+  // the purse's key is made and used in the page. a script from another server is a script that could take it.
+  const page = fs.readFileSync(path.join(process.cwd(), 'public', 'index.html'), 'utf8');
+  const scripts = [...page.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]);
+  check('every script the page loads is served from here', scripts.length > 0 && scripts.every((s) => !/^([a-z]+:)?\/\//i.test(s)), scripts.join(' '));
+  check('no script is written into the page itself', !/<script(?![^>]*\ssrc=)[^>]*>/i.test(page));
+  const policy: string = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'vercel.json'), 'utf8')).headers.flatMap((h: any) => h.headers).find((h: any) => h.key === 'Content-Security-Policy').value;
+  check('and the policy allows scripts from here and nowhere else', /(^|;)\s*script-src 'self'\s*(;|$)/.test(policy), policy);
+  const lib = fs.readFileSync(path.join(process.cwd(), 'public', 'vendor', 'ethers-6.13.4.umd.min.js'));
+  const libHash = crypto.createHash('sha384').update(lib).digest('base64');
+  check('the library that holds the purse key is the published build of ethers 6.13.4, byte for byte', libHash === '6Zl0Pc8zjSz8KvmNeXRvUQgY4ryFb+BwDvKCmLYcBME0joAaru491tQgi9B7zsMM', libHash);
 
   console.log('a visitor is a network, not an address');
   check('an ipv4 address is itself', network('203.0.113.7') === '203.0.113.7' && network(' 203.0.113.7:4431 ') === '203.0.113.7');
