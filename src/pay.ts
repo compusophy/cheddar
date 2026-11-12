@@ -33,10 +33,10 @@ const secretKey = (process.env.MPP_SECRET_KEY || '').trim()
 
 type Paid = { payer?: string; reference?: string };
 const payments = new WeakMap<object, Paid>();
-let loaded: Promise<{ mppx: any; Receipt: any }> | null = null;
+let loaded: Promise<{ mppx: any; Receipt: any; Credential: any }> | null = null;
 function load() {
   return (loaded ||= (async () => {
-    const [{ Mppx, tempo, Store }, { Receipt }] = await Promise.all([import('mppx/server'), import('mppx')]);
+    const [{ Mppx, tempo, Store }, { Receipt, Credential }] = await Promise.all([import('mppx/server'), import('mppx')]);
     // spent credentials are remembered in the game's own database, so a payment cannot be replayed
     // against another instance.
     const store = Store.sql({ dialect: 'postgres', query: (text: string, params: unknown[]) => db.sql.unsafe(text, params as any[]) as any });
@@ -51,8 +51,20 @@ function load() {
         onPaymentSuccess: (ctx: any) => { if (ctx?.input && typeof ctx.input === 'object') payments.set(ctx.input, { payer: ctx.payer, reference: ctx.receipt?.reference }); },
       } as any)],
     } as any);
-    return { mppx, Receipt };
+    return { mppx, Receipt, Credential };
   })().catch((e) => { loaded = null; throw e; }));
+}
+/**
+ * has the money for this request already left the payer?
+ *
+ * a payment arrives one of two ways. "pull": the payer signs a transfer and hands it over, and it
+ * only happens if this server sends it. "push": the payer sends the transfer themselves and hands
+ * over its hash. a pulled payment can still be turned away at no cost to anyone. a pushed one has
+ * been made: turning the request away then keeps the money and gives nothing for it.
+ */
+function movedAlready(Credential: any, request: Request): boolean {
+  try { return ['hash', 'zone'].includes(Credential.fromRequest(request)?.payload?.type); }
+  catch { return false; } // no credential, or not one this understands: nothing has been paid yet
 }
 
 export const ready = () => load().then(() => true);
@@ -133,7 +145,7 @@ the first response is \`402 Payment Required\` with a tempo charge for $${f.stak
 ${testnet ? `npx mppx ${f.play.url} -J '{"nickname": "your name"}' --network testnet` : `tempo request -X POST --json '{"nickname": "your name"}' ${f.play.url}`}
 \`\`\`
 
-you get back a \`session\`. nothing is charged if the game is closed, asleep or busy learning: those answer 503 before any payment is asked for.
+you get back a \`session\`. nothing is charged if the game is closed, asleep or busy learning: those answer 503 before any payment is asked for, and a payment you have signed but not sent is not sent. a payment you sent yourself (push mode) has been made, so it is never turned away: you get your game whatever state the game is in, with a \`note\` saying what to expect.
 
 ## 3. talk to it (free, until the game ends)
 
@@ -200,10 +212,15 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       if (claimed !== undefined && claimed !== null && claimed !== '' && !isAddress(String(claimed))) return res.status(400).json({ error: 'address: a tempo address, or leave it out and the wallet that pays is used' });
       // the machine's address plays outside the rate limits and can win nothing. nobody buys a game as it.
       if (claimed && playsFree(String(claimed))) return res.status(400).json({ error: 'address: that one is the machine\'s. use your own, or leave it out.' });
-      // everything that could refuse the game is checked before any money is asked for.
-      const up = await think.awake();
-      if (!up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true, ...(up.wakesIn ? { retry_after: up.wakesIn } : {}) });
-      if (await db.lockSince('harden')) return res.status(503).json({ error: 'it is learning from a win. nothing was charged. try again in a minute.', retry_after: 30 });
+      const { mppx, Receipt, Credential } = await load();
+      const request = toRequest(req);
+      // everything that could refuse the game is checked before any money is asked for, or taken. but a
+      // payment the payer has already sent themselves is not turned away for any of it: the money has
+      // moved, so the game is theirs, exactly as a stake that has left a purse always becomes a game.
+      const moved = movedAlready(Credential, request);
+      const [up, learning] = await Promise.all([think.awake(), db.lockSince('harden')]);
+      if (!moved && !up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true, ...(up.wakesIn ? { retry_after: up.wakesIn } : {}) });
+      if (!moved && learning) return res.status(503).json({ error: 'it is learning from a win. nothing was charged. try again in a minute.', retry_after: 30 });
       // a game the ai's learning cut short: its session id buys back the messages that were left. no charge.
       const prior = req.body?.session;
       if (prior !== undefined && prior !== null && prior !== '') {
@@ -212,10 +229,8 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
         return res.json({ ok: true, carried: true, session: c.session, generation: c.gen, pot: c.jackpot, turns_left: c.turnsLeft, playing_as: c.player,
           note: 'this is the rest of the game that was interrupted. nothing was charged.' });
       }
-      if (flag('CLOSED')) return res.status(503).json({ error: 'closed for now. nothing was charged.' });
-      const { mppx, Receipt } = await load();
+      if (!moved && flag('CLOSED')) return res.status(503).json({ error: 'closed for now. nothing was charged.' });
       const gen = await db.currentGeneration();
-      const request = toRequest(req);
       const paid = await mppx.charge({ amount: String(STAKE), description: `say cheese: one game against generation ${gen.gen}` })(request);
       if (paid.status === 402) return void (await reply(res, paid.challenge));
 
@@ -236,6 +251,10 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
         playing_as: player, prize_goes_to: player, payment: tx,
         next: { method: 'POST', url: `${base}/api/agent/say`, body: { session: s.body.session, message: 'your first message' } },
         goal: `get it to say "${WORD}". its rules: ${base}/api/state`,
+        // seated because the payment had already been made, at a moment the game would otherwise have said no.
+        ...(moved && learning ? { note: 'your payment had already been made, so the game is yours. it is learning from a win right now: when it has, this game is carried over to the new rules at no charge (the answer to your next message says how).' }
+          : moved && !up.ok ? { note: `your payment had already been made, so the game is yours. it is asleep right now (${up.why}): a message sent while it is asleep is refused and uses none of your turns.` }
+          : moved && flag('CLOSED') ? { note: 'your payment had already been made, so the game is yours, though no new games are being sold right now.' } : {}),
       })));
     } catch (e) {
       console.error('[agent] play', e);

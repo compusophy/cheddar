@@ -259,6 +259,9 @@ async function main() {
   console.log('the pot is not thinking money');
   const mid = await playing();
   check('a message goes through while there is money to think with', (await say(mid.session, 'hello')).status === 200);
+  // two prices asked for while it is awake, each to be paid after it has fallen asleep: one each way of paying.
+  const payPull = await mppx.preparePayment(await fetch(BASE + '/api/agent/play', init()), { request: init() });
+  const payPush = await mppx.preparePayment(await fetch(BASE + '/api/agent/play', init()), { request: init() });
   b = await books();
   const realPot = b.pot;
   check('the house wallet is shared with the pot here', b.thinking.shares_the_pot_wallet === true);
@@ -270,8 +273,25 @@ async function main() {
   check('a message is refused, and says it did not count', refused.status === 503 && refused.asleep === true, JSON.stringify(refused));
   check('nothing was spent on it', near((await books()).thinking.spent, spentBefore));
   check('no new game is sold either', (await post('/agent/play', {})).status === 503);
-  await sql`UPDATE jackpot SET amount = ${realPot} WHERE id = 1`;
+  // an agent's payment arrives one of two ways. one it has signed and handed over, which only happens
+  // if the game sends it: that one can be turned away for nothing. one it has already sent itself: that
+  // one is money in the house, and has to become a game whatever state the game is in.
+  await sql`UPDATE jackpot SET amount = ${b.balance + 5} WHERE id = 1`; // asleep, and a stake arriving does not change that
   await books();
+  const walletBefore = await bal(agent.address);
+  const pulled = await fetch(BASE + '/api/agent/play', payPull.setCredential(init(), await payPull.createCredential()));
+  check('an agent whose payment has not been sent yet is turned away, and keeps its money', pulled.status === 503 && near(await bal(agent.address), walletBefore), `${pulled.status} ${walletBefore - (await bal(agent.address))}`);
+  const sentItself = await payPush.createCredential({ mode: 'push' });
+  check('an agent that sends its payment itself has paid before it asks', near(walletBefore - (await bal(agent.address)), state.stake, 0.01), String(walletBefore - (await bal(agent.address))));
+  const seated = await fetch(BASE + '/api/agent/play', payPush.setCredential(init(), sentItself));
+  const seat = await seated.json() as any;
+  check('so it is given its game though the game is asleep, and told so', seated.status === 200 && !!seat.session && /asleep/.test(seat.note || ''), JSON.stringify(seat).slice(0, 300));
+  const early = await asay(seat.session, 'hello?');
+  check('a message sent while it sleeps is refused', early.status === 503, JSON.stringify(early).slice(0, 160));
+  await sql`UPDATE jackpot SET amount = ${realPot + state.stake * state.share} WHERE id = 1`; // back to normal, with that game's share of its stake in the pot
+  await books();
+  const later = await asay(seat.session, 'hello again');
+  check('and once it wakes, the game that was paid for plays, with no message lost', later.status === 200 && later.turns_left === state.max_turns - 1, JSON.stringify(later).slice(0, 200));
   const resumed = await say(mid.session, 'and now?');
   check('with the pot back to normal it carries on, having lost no messages', resumed.status === 200 && resumed.turnsLeft === state.max_turns - 2, JSON.stringify({ status: resumed.status, left: resumed.turnsLeft }));
 
