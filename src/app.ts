@@ -192,7 +192,7 @@ app.get('/api/admin/books', async (req, res) => {
     taken_in_after_pot: Math.round(b.staked * (1 - JACKPOT_SHARE) * 1e6) / 1e6,
     // thinking: what the model has cost, and whether the wallet that pays for it can pay for more.
     // `balance` here is on the network the model is paid on, which is mainnet even for a testnet game.
-    thinking: { ...think.describe(), model: MODEL, token: think.THINK_TOKEN, balance: up.balance, awake: up.ok, why: up.why,
+    thinking: { ...think.describe(), model: MODEL, token: think.THINK_TOKEN, balance: up.balance, shares_the_pot_wallet: think.SHARED, set_aside_for_prizes: up.reserved, available: up.available, awake: up.ok, why: up.why,
       max_price: think.THINK_MAX_PRICE, daily_cap: think.THINK_DAILY_CAP, machine_daily_cap: think.MACHINE_DAILY_CAP, ...tb },
     settings: { stake: STAKE, jackpot_share: JACKPOT_SHARE, seed: JACKPOT_SEED, grant: GRANT, closed: flag('CLOSED'), payouts_off: flag('PAYOUTS_OFF') },
   });

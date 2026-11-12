@@ -17,6 +17,7 @@ import { createClient, createPublicClient, http, formatUnits, parseUnits } from 
 import { privateKeyToAccount } from 'viem/accounts';
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains';
 import { net, num } from './net';
+import { agentAddress } from './treasury';
 import * as db from './db';
 
 const env = (k: string) => (process.env[k] || '').trim();
@@ -102,25 +103,45 @@ export async function balance(): Promise<number> {
 }
 
 /**
- * can the house think right now? asked before a stake is taken, so nobody pays for a game the ai
- * cannot afford to play. cached briefly: the answer is read on every page load.
+ * is the wallet that pays for thoughts the same money that holds the pot? it is when thinking and the
+ * game share a network, a token and a wallet, which is the normal real-money setup: one balance,
+ * stakes in, thoughts and prizes out.
  */
-let last: { at: number; value: { ok: boolean; why: string | null; balance: number | null } } | null = null;
-export async function awake(fresh = false): Promise<{ ok: boolean; why: string | null; balance: number | null }> {
+export const SHARED = thinkNetName === net.name && THINK_TOKEN.toLowerCase() === net.token.toLowerCase() && payer.toLowerCase() === agentAddress.toLowerCase();
+
+/**
+ * what the house may spend on thoughts. when one balance holds everything, the pot and every win
+ * still owed are not thinking money: they are promised to players. only what is left over is the
+ * ai's to think with, so a long run of chatter can never eat a prize.
+ */
+export async function spendable(): Promise<{ balance: number; reserved: number; available: number }> {
+  const bal = await balance();
+  if (!SHARED) return { balance: bal, reserved: 0, available: bal };
+  const [pot, owed] = await Promise.all([db.jackpot(), db.owedTotal()]);
+  const reserved = Math.round((pot + owed) * 1e6) / 1e6;
+  return { balance: bal, reserved, available: Math.round((bal - reserved) * 1e6) / 1e6 };
+}
+
+/**
+ * can the house think right now? asked before a stake is taken, so nobody pays for a game the ai
+ * cannot afford to play, and again before every thought. cached briefly: it is read on every page load.
+ */
+export type Awake = { ok: boolean; why: string | null; balance: number | null; reserved: number; available: number | null };
+let last: { at: number; value: Awake } | null = null;
+export async function awake(fresh = false): Promise<Awake> {
   if (!fresh && last && Date.now() - last.at < 20_000) return last.value;
-  let value: { ok: boolean; why: string | null; balance: number | null };
+  let value: Awake;
   try {
     const spent = await db.thoughtSpent24h();
-    if (API_KEY) value = { ok: true, why: null, balance: null };
+    if (API_KEY) value = { ok: true, why: null, balance: null, reserved: 0, available: null };
     else {
-      const bal = await balance();
-      value = spent >= THINK_DAILY_CAP ? { ok: false, why: 'today\x27s thinking budget is spent', balance: bal }
-        : bal < FLOOR ? { ok: false, why: 'out of thinking money', balance: bal }
-        : { ok: true, why: null, balance: bal };
+      const m = await spendable();
+      const why = spent >= THINK_DAILY_CAP ? "today's thinking budget is spent" : m.available < FLOOR ? 'out of thinking money' : null;
+      value = { ok: !why, why, ...m };
     }
   } catch (e) {
     // could not read the balance: say so plainly rather than guess either way.
-    value = { ok: false, why: 'cannot check its thinking money right now', balance: null };
+    value = { ok: false, why: 'cannot check its thinking money right now', balance: null, reserved: 0, available: null };
     console.error('[think] awake check failed', (e as Error).message);
   }
   last = { at: Date.now(), value };
@@ -168,6 +189,10 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
     throw new Broke(`no payable offer from the model: ${(e as Error).message.slice(0, 200)}`);
   }
   if (!prepared.payment) return { res: prepared.response, paid: false, sellerFailed: false };
+  // the same question the game asks before it takes a stake, asked again before every payment: a
+  // game already under way does not get to think with money that is promised to a winner.
+  const up = await awake();
+  if (!up.ok) throw new Broke(up.why || 'asleep');
   const price = amountOf(prepared.payment.challenge);
   const ceiling = a.maxPrice ?? THINK_MAX_PRICE;
   if (!(price > 0) || price > ceiling) throw new Broke(`a thought was quoted at $${price}; the ceiling is $${ceiling}`);

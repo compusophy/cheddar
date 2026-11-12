@@ -22,7 +22,7 @@ async function main() {
   console.log(`pays on   ${d.network}, from ${d.payer}, in token ${think.THINK_TOKEN}`);
   console.log(`ceilings  $${think.THINK_MAX_PRICE} a thought, $${think.THINK_DAILY_CAP} a day ($${think.MACHINE_DAILY_CAP} of it for the machine)`);
   const a = await think.awake(true);
-  console.log(`balance   ${a.balance === null ? 'not read' : '$' + a.balance}`);
+  console.log(`balance   ${a.balance === null ? 'not read' : '$' + a.balance}${think.SHARED && a.balance !== null ? `, of which $${a.reserved} is the pot and wins still owed: $${a.available} to think with` : ''}`);
   console.log(`awake     ${a.ok ? 'yes' : 'no: ' + a.why}`);
   const prompt = process.argv.slice(2).join(' ').trim();
   if (!prompt) { console.log('\n(pass a message to buy one thought)'); return void (await db.sql.end()); }

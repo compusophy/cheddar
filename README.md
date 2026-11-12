@@ -22,11 +22,12 @@ there is no api key anywhere in this project. the model sits behind an http endp
 
 by default it buys from openrouter through tempo's own paid proxy (`openrouter.mpp.tempo.xyz`), one charge per reply, quoted before it is paid. `GET /api/thoughts` lists the latest payments with their transaction hashes, and the history tab links to the most recent one.
 
-three things stand between the model and the wallet, and none of them is the model:
+four things stand between the model and the wallet, and none of them is the model:
 
 - **a ceiling per thought** (`THINK_MAX_PRICE`, default $0.05). a dearer quote is refused unsigned. the rule rewrite after a loss is one big call and has its own (`PATCH_MAX_PRICE`, default $0.25).
 - **a ceiling per day** (`THINK_DAILY_CAP`, default $5), set aside in the database before each payment so two functions cannot both spend the last of it.
 - **one token, one chain.** the wallet only signs for the token and network it was told to pay in.
+- **the pot is not thinking money.** when one wallet holds everything (the real-money setup), the pot and every win still owed are set aside before anything is spent on a thought. only what is left over is the ai's to think with, and the check is made before every payment, so a long run of chatter can never eat a prize. `GET /api/admin/books` shows the split under `thinking`.
 
 the seller normally pays the network fee on each payment (the house signs, the seller broadcasts). if the seller's half of that fails, the house broadcasts the payment itself and pays its own fee, a fraction of a tenth of a cent, and keeps doing so for ten minutes. `THINK_MODE=push` makes that the rule; `THINK_MODE=pull` forbids it.
 
@@ -118,7 +119,7 @@ two switches for the operator, both read from the environment: `CLOSED=1` stops 
 before the first real dollar:
 
 0. **a clean ledger.** the pot, and any win still owed, sit in the database as plain numbers. on a database that has been running on play money those numbers were built from play dollars, and switching the network would turn them into real debts. start real money on a fresh database (`npm run reset` against it), or with the pot set to what you mean to put up.
-0. **thinking money.** the house wallet pays for the model out of the same balance that holds the pot. `GET /api/admin/books` shows what thinking has cost under `thinking`. with stakes and thoughts in one token on one network, nothing else needs funding.
+0. **thinking money.** the house wallet pays for the model out of the same balance that holds the pot, but never out of the pot itself: it needs the seed, plus something of its own to think with, before the first game. `GET /api/admin/books` shows what thinking has cost and what is left for it under `thinking`.
 1. **the seed.** generation 0 falls to the first person who asks, and a win pays the seed. with a $1 seed and a $0.25 stake every early win is profit for the winner and a loss for the house, up to the daily cap, until the ai is hard to beat. set `JACKPOT_SEED=0`, or start from a database that already holds a hardened ai.
 2. **the law.** a paid game with a cash prize is regulated differently in different places. ask someone who knows before you take money.
 3. **the key.** `AGENT_PRIVATE_KEY` holds everyone's pot. it should be a wallet used for nothing else, holding no more than it needs.

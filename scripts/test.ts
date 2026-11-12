@@ -133,6 +133,18 @@ async function main() {
   check('a start that stopped for want of money is not counted', (await db.lessonStarted(lessonWin)) === 2);
   await db.sql`DELETE FROM breaches WHERE id = ${lessonWin}`;
 
+  console.log('prize money that has not left the house is counted as owed');
+  const owedBefore = await db.owedTotal();
+  await db.createSession('owed-total-test', 0, '0x00000000000000000000000000000000000000a9', null);
+  const oid = await db.recordBreach({ gen: 0, session_id: 'owed-total-test', player: '0x00000000000000000000000000000000000000a9', nickname: null, recipient: '0x00000000000000000000000000000000000000a9', amount: 12, tx_hash: null, transcript: '[]' });
+  check('a win not yet paid is owed in full', Math.abs((await db.owedTotal()) - (owedBefore + 12)) < 1e-9, String(await db.owedTotal()));
+  await db.addPayment(oid, 5, '0x' + '0d'.repeat(32));
+  check('a part payment brings it down by that part', Math.abs((await db.owedTotal()) - (owedBefore + 7)) < 1e-9);
+  await db.addPayment(oid, 7, '0x' + '0e'.repeat(32));
+  check('and nothing is owed once the last part has gone', Math.abs((await db.owedTotal()) - owedBefore) < 1e-9);
+  await db.sql`DELETE FROM breaches WHERE id = ${oid}`;
+  await db.sql`DELETE FROM sessions WHERE id = 'owed-total-test'`;
+
   console.log('a paid game the ai interrupted is handed back, once, for the part not used');
   const cp = '0x00000000000000000000000000000000000000f1';
   const MAXT = 25;

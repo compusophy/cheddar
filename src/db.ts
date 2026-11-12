@@ -111,7 +111,7 @@ export async function reserveThought(purpose: string, model: string, amount: num
   return sql.begin(async (tx) => {
     await tx`LOCK TABLE thoughts IN SHARE ROW EXCLUSIVE MODE`;
     const [g] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM thoughts WHERE created_at > now() - interval '1 day'`;
-    if (Number(g.total) + amount > cap + 1e-9) return { ok: false as const, why: 'today\x27s thinking budget is spent' };
+    if (Number(g.total) + amount > cap + 1e-9) return { ok: false as const, why: "today's thinking budget is spent" };
     if (purposeCap !== undefined) {
       const [p] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM thoughts WHERE purpose = ${purpose} AND created_at > now() - interval '1 day'`;
       if (Number(p.total) + amount > purposeCap + 1e-9) return { ok: false as const, why: `today's ${purpose} budget is spent` };
@@ -250,6 +250,8 @@ export const breachById = async (id: number) => (await sql<Breach[]>`SELECT * FR
 export const unpaidWins = () => sql<Breach[]>`
   SELECT b.* FROM breaches b JOIN generations g ON g.gen = b.gen + 1
   WHERE b.amount > 0 AND b.tx_hash IS NULL ORDER BY b.id ASC LIMIT 20`;
+/** every dollar of prize money that has been won and has not yet left the house. */
+export const owedTotal = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount - paid),0)::float AS t FROM breaches WHERE tx_hash IS NULL AND amount > 0`)[0].t);
 /** the books: what came in, what went out, what is still owed. */
 export async function books() {
   const [s] = await sql<any[]>`SELECT COUNT(*) FILTER (WHERE via IS DISTINCT FROM 'carry')::int AS games, COUNT(*) FILTER (WHERE via = 'carry')::int AS carried, COALESCE(SUM(amount),0)::float AS staked FROM stakes`;
