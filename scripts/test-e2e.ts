@@ -107,12 +107,19 @@ async function main() {
   const machine = privateKeyToAccount(generatePrivateKey()).address; // the machine has an address here, but it is switched off
   await fund(houseAccount.address);
   await until('the house wallet to be filled by the faucet', async () => (await bal(houseAccount.address)) > 100);
+  // a stake sent to this house before its ledger exists: money that came in under some earlier set of books.
+  const ancient = await purse('ancient');
+  await fund(ancient.address);
+  await until('the old purse to be filled', async () => (await bal(ancient.address)) > 1);
+  const oldStake = await ancient.send(houseAccount.address, 0.25);
+  const oldStakeAt = Date.now();
   const common = { DATABASE_URL: DB, POSTGRES_URL: DB, DB_POOL: '1', NETWORK: 'testnet', AGENT_PRIVATE_KEY: houseKey, THINK_KEY: '', THINK_API_KEY: '', TOKEN_ADDRESS: '', TOKEN_SYMBOL: '' };
   start('seller', 'scripts/seller.ts', { ...common, SELLER_PORT: String(SELLER_PORT), SELLER_SPONSOR: '1' });
   await until('the stand-in model', async () => (await fetch(`http://localhost:${SELLER_PORT}/`)).ok, 120_000);
   start('game', 'src/server.ts', { ...common, PORT: String(PORT), ADMIN_TOKEN: ADMIN, BOT: '0', REDTEAM_ADDRESS: machine, CLOSED: '', PAYOUTS_OFF: '', GRANTS_PER_VISITOR: '3', GRANTS_PER_DAY: '',
     THINK_URL: `http://localhost:${SELLER_PORT}/v1/chat/completions`, THINK_NETWORK: 'testnet', THINK_MODE: '', MODEL: '', PATCH_MODEL: '', LESSON_SECONDS: '' });
   await until('the game', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
+  if (Date.now() - oldStakeAt < 25_000) await nap(25_000 - (Date.now() - oldStakeAt)); // the old stake has to be plainly older than the ledger about to begin
   const wiped = await fetch(BASE + '/api/admin/reset', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } });
   if (!wiped.ok) throw new Error('could not reset the scratch database');
   state = await api('/state');
@@ -147,6 +154,10 @@ async function main() {
   check('the others are told it is their network, and when', turnedAway.every((r) => r.why === 'visitor' && r.retry_after > 86000), JSON.stringify(turnedAway[0]));
   const elsewhere = await (await purse('elsewhere')).grant();
   check('and a purse from anywhere else is still given its dollar', elsewhere.status === 200, JSON.stringify(elsewhere));
+  // another site's page, making its visitors' browsers ask on its behalf: each visitor would be a fresh share.
+  const asks = (origin: string | null) => fetch(BASE + '/api/faucet', { method: 'POST', headers: { ...J, 'x-real-ip': '203.0.113.201', ...(origin ? { origin } : {}) }, body: JSON.stringify({ address: privateKeyToAccount(generatePrivateKey()).address }) });
+  check('a grant asked for by another site\x27s page is refused', (await asks('https://some-other-site.example')).status === 403);
+  check('one asked for by the game\x27s own page, or by a program that is no browser, is not', (await asks(BASE)).status === 200 && (await asks(null)).status === 200);
 
   console.log('a stake becomes one game');
   const a = await purse('alice');
@@ -162,6 +173,9 @@ async function main() {
   check('one stake presented six times at once opens one game', games.size === 1, `${opens.map((r) => r.status)}`);
   check('and the pot grows by one stake', near((await api('/state')).jackpot, potBefore + state.stake * state.share), String((await api('/state')).jackpot - potBefore));
   const session = [...games][0] as string;
+  const stale = await ancient.open(oldStake);
+  check('a stake made before this ledger began does not open a game in it', stale.status === 402 && /before this game.s ledger began/.test(stale.error || ''), JSON.stringify(stale).slice(0, 200));
+  check('nor grow its pot', near((await api('/state')).jackpot, potBefore + state.stake * state.share));
   const looked = await a.peek();
   check('the game says which stake opened it', String(looked.stake).toLowerCase() === hash.toLowerCase(), String(looked.stake));
   // a second stake, sent while that game is open (two tabs at the same moment). it is this purse's money

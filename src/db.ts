@@ -19,6 +19,15 @@ export const stamp = () => changes;
 const touch = () => { changes++; };
 
 let ready: Promise<void> | null = null;
+/**
+ * when this ledger began, in milliseconds: the moment its first generation was written, which is the
+ * moment it was created or last reset. it never changes while the ledger lives, so it is read once.
+ */
+let born: number | null = null;
+export async function ledgerBorn(): Promise<number> {
+  if (born === null) born = Number((await sql<{ t: number }[]>`SELECT (EXTRACT(EPOCH FROM MIN(created_at)) * 1000)::float AS t FROM generations`)[0]?.t) || 0;
+  return born;
+}
 export function init(): Promise<void> {
   if (ready) return ready;
   ready = (async () => {
@@ -546,6 +555,13 @@ export async function rateAllowAll(limits: Allowance[]): Promise<{ bucket: strin
     return null;
   }) as any;
 }
+/**
+ * hand back the place a request took in each of these allowances: the newest one in each. for a
+ * request that was counted and then came to nothing (the transfer it was counted for never happened).
+ */
+export const rateRelease = (buckets: string[]) => sql.begin(async (tx) => {
+  for (const b of buckets) await tx`DELETE FROM rate_hits WHERE id = (SELECT id FROM rate_hits WHERE bucket = ${b} ORDER BY at DESC, id DESC LIMIT 1)`;
+});
 /** one request against one allowance. returns how many seconds until a slot frees, or 0 when allowed. */
 export const rateAllow = async (bucket: string, max: number, seconds: number): Promise<number> =>
   (await rateAllowAll([{ bucket, max, seconds }]))?.wait ?? 0;
@@ -585,7 +601,7 @@ export async function resetDb() {
   const home = await sql<{ value: string }[]>`SELECT value FROM ledger_mark WHERE key = 'network'`.then((r) => r[0]?.value ?? null, () => null);
   if (resetIsGuarded(net.real, home) && !flag('ALLOW_RESET')) throw new Error(`this is a real-money database${net.real ? '' : ' (it was built on mainnet, though this process is set to testnet)'}: a reset would erase the pot and every win still owed. set ALLOW_RESET=1 on the server if you mean it.`);
   for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'ledger_mark', 'agent_payments', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
-  ready = null;
+  ready = null; born = null;
   await init();
   touch();
 }

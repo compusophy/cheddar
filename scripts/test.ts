@@ -208,6 +208,16 @@ async function main() {
   check('an hourly allowance on the same bucket only looks back an hour', (await db.rateAllow(daily, 2, 3600)) === 0);
   await db.sql`DELETE FROM rate_hits WHERE bucket = ${daily}`;
 
+  console.log('a place in an allowance can be handed back');
+  const relB = 'rate-rel-' + Date.now();
+  await db.rateAllow(relB, 2, 86400); await db.rateAllow(relB, 2, 86400);
+  check('two taken of two: a third is refused', (await db.rateAllow(relB, 2, 86400)) > 0);
+  await db.rateRelease([relB]);
+  check('one handed back: one more is let through, and only one', (await db.rateAllow(relB, 2, 86400)) === 0 && (await db.rateAllow(relB, 2, 86400)) > 0);
+  await db.sql`DELETE FROM rate_hits WHERE bucket = ${relB}`;
+  const began = await db.ledgerBorn();
+  check('the ledger knows when it began', began > 1_600_000_000_000 && began <= Date.now() + 5000, String(began));
+
   console.log('two allowances are taken together or not at all');
   const mineB = 'rate-mine-' + Date.now(), allB = 'rate-all-' + Date.now();
   const hitsIn = async (b: string) => (await db.sql<{ n: number }[]>`SELECT COUNT(*)::int AS n FROM rate_hits WHERE bucket = ${b}`)[0].n;

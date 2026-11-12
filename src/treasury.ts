@@ -145,19 +145,24 @@ export async function pay(to: string, amount: string): Promise<PayResult> {
  * this is how a stake is checked: the purse sends, the server confirms on chain, nothing is trusted
  * from the client. waits briefly for the receipt so a just-sent stake counts.
  */
-export async function verifyTransfer(hash: string, from: string, to: string, amount: number): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function verifyTransfer(hash: string, from: string, to: string, amount: number): Promise<{ ok: true; at: number } | { ok: false; error: string }> {
   try {
     const receipt = await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout: 20_000 });
     if (receipt.status !== 'success') return { ok: false, error: 'stake transaction failed' };
     const want = parseUnits(amount.toFixed(6), 6);
+    let found = false;
     for (const log of receipt.logs) {
-      if (log.address.toLowerCase() !== TOKEN.toLowerCase()) continue;
+      if (found || log.address.toLowerCase() !== TOKEN.toLowerCase()) continue;
       try {
         const ev = decodeEventLog({ abi: erc20Abi, data: log.data, topics: log.topics, eventName: 'Transfer' });
-        if (ev.args.from.toLowerCase() === from.toLowerCase() && ev.args.to.toLowerCase() === to.toLowerCase() && ev.args.value >= want) return { ok: true };
+        found = ev.args.from.toLowerCase() === from.toLowerCase() && ev.args.to.toLowerCase() === to.toLowerCase() && ev.args.value >= want;
       } catch { /* not a transfer */ }
     }
-    return { ok: false, error: 'that transaction is not a stake to the house' };
+    if (!found) return { ok: false, error: 'that transaction is not a stake to the house' };
+    // when it happened, by the chain's clock (seconds): a stake has to be newer than the ledger it is
+    // shown to. if the block cannot be read just now, that is "not yet", never "yes".
+    const block = await publicClient.getBlock({ blockNumber: receipt.blockNumber });
+    return { ok: true, at: Number(block.timestamp) };
   } catch (e) {
     return { ok: false, error: 'could not find the stake on chain yet' };
   }

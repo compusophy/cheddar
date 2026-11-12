@@ -40,6 +40,8 @@ const lessonDeadline = () => Math.min(Date.now() + LESSON_MS, mustEndBy(AFTER_LE
 /** a lesson is not begun with less than this: it would be a rushed one, and the next request can give it a full turn. */
 const LESSON_MIN_MS = Math.min(60_000, LESSON_MS / 2);
 const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()].filter(Boolean));
+/** how far the chain's clock and the database's may disagree about when a stake was made, before it counts as older than the ledger. */
+const LEDGER_SLACK_MS = 15_000;
 /** the machine's own address: it plays free, outside the rate limits, and can win nothing. */
 export const playsFree = (address: string) => FREE_PLAYERS.has(String(address).toLowerCase());
 
@@ -75,6 +77,11 @@ export async function openSession(player: string, nickname: string | null, stake
     if (await db.stakeSeen(hash)) return { status: 409, body: { error: 'that stake was already used' } };
     const v = await treasury.verifyTransfer(hash, player, treasury.agentAddress, STAKE);
     if (!v.ok) return { status: 402, body: { error: v.error } };
+    // a stake belongs to the ledger that was open when it was made. the record of which stakes have
+    // been used lives in the ledger, so after a reset (or on a new one, behind the same house wallet)
+    // every stake ever sent would have been unused again: free games, and a pot grown with money
+    // that came in under the old books. one from before this ledger began does not open a game in it.
+    if (v.at * 1000 < (await db.ledgerBorn()) - LEDGER_SLACK_MS) return { status: 402, body: { error: 'that stake was made before this game\'s ledger began. it cannot open a game here.' } };
     // the payment is used, the pot grows and the game opens in one step. of several requests carrying
     // the same payment, exactly one gets here with it still unused.
     const opened = await db.openStaked({ sessionId: id, gen: gen.gen, player, nickname: cleanNick(nickname), amount: STAKE, txHash: hash, toPot: STAKE * JACKPOT_SHARE, via: null });

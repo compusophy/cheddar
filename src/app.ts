@@ -259,6 +259,12 @@ app.post('/api/faucet', async (req, res) => {
   const { address } = req.body || {};
   // with real money there is no grant at all: a fresh address is free to make, so a grant is a tap.
   if (!(GRANT > 0)) return res.status(404).json({ error: 'no welcome grant here' });
+  // the share of grants a visitor may have is counted by where the request comes from. another site's
+  // page can make its own visitors' browsers send this request, each from their own address, to purses
+  // it chooses: every one of its visitors becomes a fresh share. a browser says which site sent a
+  // request, so one sent by a page that is not this game's is refused. (a program that is not a
+  // browser says nothing, and is counted by its own address like anyone else.)
+  if (!sameSite(req)) return res.status(403).json({ error: 'the welcome grant is only given through the game\'s own page' });
   if (!address || !isAddress(address)) return res.status(400).json({ error: 'bad purse' });
   if (Number(await treasury.balance(address)) >= STAKE + 0.02) return res.status(409).json({ error: 'that purse can already afford a game', why: 'funded' });
   // the purse's dollar for the day is taken in a single step, so of many requests at once only one goes on to be paid.
@@ -276,10 +282,23 @@ app.post('/api/faucet', async (req, res) => {
       : { error: 'the house has given your network its share of play money for today', why: 'visitor', retry_after: full.wait });
   }
   const r = await treasury.pay(address, String(GRANT));
-  // a transfer that certainly did not happen leaves the purse free to ask again. one that may still land does not.
-  if (!r.ok && !r.maybe) await db.unclaimFaucet(address);
+  // a transfer that certainly did not happen leaves the purse free to ask again, and gives back the
+  // two places it was counted against: otherwise a house wallet that is empty, or a chain that is
+  // not answering, uses up the whole day's grants on transfers that were never made. one that may
+  // still land keeps all three.
+  if (!r.ok && !r.maybe) {
+    await db.unclaimFaucet(address);
+    await db.rateRelease(['grant-by:' + visitor(req), 'grant']).catch((e) => console.error('[grant] could not give back a count:', (e as Error).message));
+  }
   res.json({ ok: r.ok });
 });
+/** was this request sent by this game's own page, or by something that is not a browser at all? false for another site's page. */
+function sameSite(req: express.Request): boolean {
+  const from = String(req.headers.origin || '').trim();
+  if (!from || from === 'null') return !from; // no origin: not a browser's cross-site request. "null": a sandboxed or local page, which is not ours
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim().toLowerCase();
+  try { return new URL(from).host.toLowerCase() === host; } catch { return false; }
+}
 
 app.get('/api/bot/tick', async (req, res) => {
   const secret = process.env.CRON_SECRET;
