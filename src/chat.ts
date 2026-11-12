@@ -15,6 +15,8 @@ import { step, stepStream, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './age
 import { harden, summarise } from './immune';
 import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, RATE, about, saidIt } from './game';
 import * as treasury from './treasury';
+import { flag } from './net';
+import { awake, Broke } from './think';
 
 export type ChatResult = { status: number; body: any };
 /** a nickname is plain text on a public board: short, printable, no control characters, no lookalike-of-the-machine. */
@@ -39,6 +41,11 @@ export async function openSession(player: string, nickname: string | null, stake
   }
   const id = randomBytes(12).toString('hex');
   if (!free) {
+    // closed: no new games. said before any stake is asked for, and the page checks the same switch
+    // before it sends one. a stake that is already on chain is still honoured below: the money moved.
+    if (!stakeTx && flag('CLOSED')) return { status: 503, body: { error: 'closed for now. nothing was charged.' } };
+    // asleep: the house cannot pay for the ai's thoughts right now, so it does not sell a game it cannot play.
+    if (!stakeTx) { const a = await awake(); if (!a.ok) return { status: 503, body: { error: `it is asleep: ${a.why}. nothing was charged.`, asleep: true } }; }
     if (!stakeTx || !/^0x[0-9a-fA-F]{64}$/.test(stakeTx)) return { status: 402, body: { error: 'stake required' } };
     if (await db.stakeSeen(stakeTx)) return { status: 409, body: { error: 'that stake was already used' } };
     const v = await treasury.verifyTransfer(stakeTx, player, treasury.agentAddress, STAKE);
@@ -46,6 +53,24 @@ export async function openSession(player: string, nickname: string | null, stake
     await db.recordStake(id, player, STAKE, stakeTx, STAKE * JACKPOT_SHARE);
   }
   await db.createSession(id, gen.gen, player.toLowerCase(), free ? String(nickname ?? '') || null : cleanNick(nickname));
+  return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
+}
+
+/**
+ * seat a player whose stake arrived as a machine payment (an agent paying over http 402).
+ * the payment layer has already verified the money and burned the credential, so this only checks
+ * the hash is new, grows the pot and opens the game. a game that purse already had open is closed:
+ * they paid for a fresh one.
+ */
+export async function openPaidSession(player: string, nickname: string | null, stakeTx: string) {
+  if (!player || !isAddress(player)) return { status: 400, body: { error: 'no address to play as' } };
+  if (await db.stakeSeen(stakeTx)) return { status: 409, body: { error: 'that payment was already used' } };
+  const gen = await db.currentGeneration();
+  const open = await db.openSessionFor(player);
+  if (open) await db.updateSession(open.id, JSON.parse(open.transcript), open.turns, open.gen === gen.gen ? 'abandoned' : 'stale');
+  const id = randomBytes(12).toString('hex');
+  await db.recordStake(id, player, STAKE, stakeTx, STAKE * JACKPOT_SHARE, 'mpp');
+  await db.createSession(id, gen.gen, player.toLowerCase(), cleanNick(nickname));
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 
@@ -81,6 +106,10 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
   if (!s) return { status: 404, body: { error: 'no such session' } };
   if (s.status !== 'open') return { status: 409, body: { error: `session is ${s.status}` } };
   if (await db.lockSince(LOCK)) return { status: 503, body: { error: 'it is learning. try again in a minute.' } };
+  // a win it has not learned from yet (the lesson was cut short, or could not be paid for) leaves a
+  // beaten generation with its winning conversation in public view. nobody plays that generation:
+  // the lesson is picked back up here, and the caller is told to come back.
+  if (await db.unfinishedWin()) return { status: 503, body: { error: 'it lost a moment ago and is about to learn from it. try again in a minute.' }, hardening: resumeHardening() };
   const gen = await db.currentGeneration();
   if (s.gen !== gen.gen) { await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'stale'); return { status: 409, body: { error: 'it learned something while you were talking. go again.' } }; }
   if (s.turns >= MAX_TURNS) { await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'exhausted'); return { status: 409, body: { error: 'this conversation has run its course' } }; }
@@ -96,7 +125,15 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
 
   const history: Turn[] = JSON.parse(s.transcript);
   const preamble = about(gen.gen, await db.jackpot());
-  const produced = onDelta ? await stepStream(gen.policy, history, message.trim(), onDelta, preamble) : await step(gen.policy, history, message.trim(), preamble);
+  const purpose = FREE_PLAYERS.has(s.player) ? 'machine' as const : 'chat' as const;
+  let produced: Turn[];
+  try {
+    produced = onDelta ? await stepStream(gen.policy, history, message.trim(), onDelta, preamble, purpose) : await step(gen.policy, history, message.trim(), preamble, purpose);
+  } catch (e) {
+    // it could not pay for this thought. the turn was not taken and the game stays open.
+    if (e instanceof Broke) { console.warn(`[chat] broke: ${e.message}`); return { status: 503, body: { error: 'it cannot afford to think right now. your game is still open and that message did not count.', asleep: true } }; }
+    throw e;
+  }
   const transcript = [...history, ...produced];
   const turns = s.turns + 1;
 
@@ -121,17 +158,20 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
     await report('reading');
     const win = (await db.breachById(winId))!;
     console.log(`[immune] gen ${failed.gen} beaten (#${winId}); learning...`);
-    const out = await harden(failed.policy, win, await db.allBreaches(), report);
+    // the machine's wins are learned from on the machine's allowance, never on the players' thinking money.
+    const budget = FREE_PLAYERS.has(win.player) ? 'machine' as const : 'house' as const;
+    const out = await harden(failed.policy, win, await db.allBreaches(), report, budget);
     const nextGen = failed.gen + 1;
     for (const round of out.log) for (const r of round.results) await db.recordRegression(nextGen, round.round, r.breachId, r.kind, r.passed, `${r.name}: ${r.detail}`);
     if (out.autoimmune) await db.markAutoimmune(winId);
     await report('noting the lesson');
-    const lesson = await summarise(JSON.parse(win.transcript), failed.policy, out.policy);
+    const lesson = await summarise(JSON.parse(win.transcript), failed.policy, out.policy, budget);
     await db.createGeneration(nextGen, out.policy, winId, out.rounds, out.regressionPassed, out.legitPassed, lesson);
     console.log(`[immune] gen ${nextGen} live after ${out.rounds} round(s). regression=${out.regressionPassed} alive=${out.legitPassed} autoimmune=${out.autoimmune}`);
-    if (prize > 0) { await report('paying out'); await payout(win, prize); }
+    if (prize > 0) { await report('paying out'); await payout((await db.breachById(winId))!); }
   } catch (e) {
-    console.error('[immune] hardening failed', e);
+    if (e instanceof Broke) console.warn(`[immune] learning from win #${winId} paused: ${e.message}`);
+    else console.error('[immune] hardening failed', e);
   } finally {
     await db.releaseLock(LOCK);
   }
@@ -147,20 +187,60 @@ export async function resumeHardening(): Promise<void> {
   if (await db.lockSince(LOCK)) return;
   const win = await db.unfinishedWin();
   if (!win) return;
+  if (!(await awake()).ok) return; // learning costs thoughts too; wait until the house can pay for them
   const failed = await db.getGeneration(win.gen);
   if (!failed) return;
   console.log(`[immune] resuming an unfinished hardening for win #${win.id}`);
-  await runHardening(failed, win.id, win.tx_hash ? 0 : Number(win.amount));
+  await runHardening(failed, win.id, owedOf(win));
 }
 
-/** the payout. the daily cap is the safety valve between the model and the money. */
-async function payout(win: db.Breach, prize: number) {
-  if ((await db.wonLast24h(win.player)) + prize > PURSE_DAILY_CAP) { console.warn(`[payout] win #${win.id} deferred: purse daily cap`); return; }
-  const rsv = await db.reserveDisbursement(win.player, prize, win.session_id);
-  if (!rsv.ok) { console.warn(`[payout] win #${win.id} deferred: daily cap`); return; }
-  const r = await treasury.pay(win.player, String(prize));
-  if (!r.ok) { await db.releaseReservation(rsv.id); console.error(`[payout] win #${win.id} failed: ${r.error}`); return; }
+/**
+ * the payout. the daily cap is the safety valve between the model and the money.
+ * returns why the win is not yet paid in full, or null when it is. a win that is put off stays owed:
+ * `settleUnpaid` comes back for it. the pot has no ceiling and the caps do, so a prize can be bigger
+ * than a cap; it is paid in parts as the window rolls, never refused outright. PAYOUTS_OFF=1 is the
+ * operator's brake: wins are still recorded and still owed, and nothing leaves the house until it is
+ * released.
+ */
+const owedOf = (w: db.Breach) => (w.tx_hash ? 0 : Math.max(0, Number(w.amount) - Number(w.paid ?? 0)));
+async function payout(win: db.Breach): Promise<string | null> {
+  const owed = owedOf(win);
+  if (owed <= 0) return null;
+  if (flag('PAYOUTS_OFF')) { console.warn(`[payout] win #${win.id} held: payouts are switched off`); return 'payouts are switched off'; }
+  const rsv = await db.reserveUpTo(win.player, owed, PURSE_DAILY_CAP, win.session_id);
+  if (!rsv.ok) { console.warn(`[payout] win #${win.id} deferred: ${rsv.why}`); return rsv.why; }
+  const r = await treasury.pay(win.player, String(rsv.amount));
+  if (!r.ok) { await db.releaseReservation(rsv.id); console.error(`[payout] win #${win.id} failed: ${r.error}`); return `transfer failed: ${r.error}`; }
   await db.settleReservation(rsv.id, r.hash);
-  await db.markPaid(win.id, prize, r.hash);
-  console.log(`[payout] win #${win.id}: $${prize} (${r.hash})`);
+  await db.addPayment(win.id, rsv.amount, r.hash);
+  const left = owed - rsv.amount;
+  console.log(`[payout] win #${win.id}: $${rsv.amount}${left > 0.000001 ? ` of $${owed}, $${left.toFixed(6)} still owed` : ''} (${r.hash})`);
+  return left > 0.000001 ? 'part paid: the rest waits for the daily cap' : null;
+}
+
+/**
+ * pay what is owed. a win whose payout was put off (a cap, a failed transfer, the brake) used to stay
+ * unpaid forever, because the only thing that ever paid a win was the hardening that followed it.
+ * this walks the owed wins oldest first, under its own lock so two instances cannot pay the same one,
+ * and re-reads each win inside the lock before sending.
+ */
+const PAY_LOCK = 'payout';
+export async function settleUnpaid(): Promise<{ paid: number[]; held: { id: number; why: string }[] }> {
+  const out = { paid: [] as number[], held: [] as { id: number; why: string }[] };
+  if (await db.lockSince(LOCK)) return out; // a hardening pays its own win; do not race it
+  if (!(await db.acquireLock(PAY_LOCK, 'settle'))) return out;
+  try {
+    for (const w of await db.unpaidWins()) {
+      const fresh = await db.breachById(w.id);
+      if (!fresh || owedOf(fresh) <= 0) continue;
+      const why = await payout(fresh);
+      if (!why) { out.paid.push(w.id); continue; }
+      out.held.push({ id: w.id, why });
+      // the house-wide reasons hold everyone behind this win too; a purse's own cap holds only that purse.
+      if (why === 'daily cap' || why === 'payouts are switched off') break;
+    }
+  } finally {
+    await db.releaseLock(PAY_LOCK);
+  }
+  return out;
 }

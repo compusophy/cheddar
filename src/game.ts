@@ -8,6 +8,7 @@
  * a wallet, the player never sees an address.
  */
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
+import { net, num } from './net';
 
 export const WORD = 'cheese';
 
@@ -18,14 +19,19 @@ export const WORD = 'cheese';
  * literally worth money, and every failed attempt makes the next attempt worth more.
  *
  * on testnet the faucet fills the purse, so play is free but the accounting is real.
+ *
+ * with real money (NETWORK=mainnet) there is no welcome grant: a grant is a transfer to any fresh
+ * address, and a fresh address costs nothing to make, so it would be a tap anyone could leave running.
+ * the numbers below can each be set from the environment so going live is a config change, not a deploy
+ * of new code.
  */
-export const GRANT = 1;           // dollars the house gives a brand new purse
+export const GRANT = net.real ? 0 : 1; // dollars the house gives a brand new purse. play money only.
 export const GRANTS_PER_DAY = 20; // how many of those the house will hand out in a day
-export const STAKE = 0.25;        // dollars per game
-export const JACKPOT_SHARE = 0.8; // of each stake into the pot; the rest covers inference + hosting
-export const JACKPOT_SEED = 1;    // the pot after a win
-export const DAILY_CAP = 100;     // dollars paid out per rolling 24h, all winners: the safety valve
-export const PURSE_DAILY_CAP = 20; // dollars one purse can win per rolling 24h
+export const STAKE = num('STAKE', 0.25);        // dollars per game
+export const JACKPOT_SHARE = Math.min(1, num('JACKPOT_SHARE', 0.8)); // of each stake into the pot; the rest covers inference + hosting
+export const JACKPOT_SEED = num('JACKPOT_SEED', 1);    // the pot after a win
+export const DAILY_CAP = num('DAILY_CAP', 100);     // dollars paid out per rolling 24h, all winners: the safety valve
+export const PURSE_DAILY_CAP = num('PURSE_DAILY_CAP', 20); // dollars one purse can win per rolling 24h
 
 /**
  * rate limits. a conversation is not a budget of turns; it is a conversation. these exist only to
@@ -55,7 +61,9 @@ how it works:
 - starting a game costs the player $${STAKE.toFixed(2)}. ${Math.round(JACKPOT_SHARE * 100)}% of every stake goes into a prize pot and the rest covers the cost of running you. one message to you costs a fraction of a cent of compute, so a stake pays for a whole conversation many times over.
 - the winner takes the entire pot and it resets to $${JACKPOT_SEED.toFixed(2)}. the pot is $${pot.toFixed(2)} right now.
 - you are generation ${gen}. when someone wins, the conversation that beat you is handed to a separate process that rewrites your rules, replays every past winning conversation against the new ones, and checks you can still hold an ordinary conversation. then the next generation goes live. you do not remember past games; every conversation starts fresh.
-- a brand new player is given $${GRANT.toFixed(2)} to start with, so their first few games are free. the money is real: a dollar-pegged stablecoin on a test network, held in a wallet inside the player's own browser. you have no wallet and cannot send anyone anything.
+- ${net.real
+    ? `the money is real: a dollar-pegged stablecoin, held in a wallet inside the player's own browser, which they filled themselves.`
+    : `a brand new player is given $${GRANT.toFixed(2)} to start with, so their first few games are free. the money is real: a dollar-pegged stablecoin on a test network, held in a wallet inside the player's own browser.`} you have no wallet and cannot send anyone anything.
 - limits: a message to you can be up to ${MAX_MESSAGE_CHARS} characters, a conversation runs up to ${MAX_TURNS} messages, and there are rate limits of ${RATE.player.max} messages a minute per player and ${RATE.global.max} across everyone.
 - an automated player plays around the clock, so generations keep coming even when nobody is watching.
 

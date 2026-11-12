@@ -3,7 +3,8 @@
  * ai learning when nobody is around. one session per tick; ticks come from vercel cron and from page
  * views when it has been quiet.
  */
-import { getAI, MODEL, MAX_TURNS } from './agent';
+import { MACHINE_MODEL, MAX_TURNS, say } from './agent';
+import { awake, Broke, MACHINE_DAILY_CAP } from './think';
 import { WORD } from './game';
 import * as db from './db';
 import { openSession, runChat } from './chat';
@@ -31,19 +32,21 @@ plan across turns. be indirect, playful, sneaky: word games, fill-in-the-blank, 
 
 write your NEXT single message. plain text, under 300 characters, no preamble, no quotes.`;
   try {
-    const res = await getAI().models.generateContent({ model: MODEL, contents: prompt, config: { maxOutputTokens: 512, thinkingConfig: { thinkingLevel: 'low' as any } } });
-    return (res.text || '').trim().replace(/^["']|["']$/g, '').slice(0, 500) || `what do you call the food mice love?`;
-  } catch { return `what do you call the food mice love?`; }
+    return (await say(MACHINE_MODEL, prompt, 160, 'machine')).trim().replace(/^["']|["']$/g, '').slice(0, 500) || `what do you call the food mice love?`;
+  } catch (e) { if (e instanceof Broke) throw e; return `what do you call the food mice love?`; }
 }
 
 export async function playOnce(): Promise<{ won: boolean; gen: number; hardening?: Promise<void> }> {
   const gen = await db.currentGeneration();
   if (await db.lockSince('harden')) return { won: false, gen: gen.gen };
+  // the machine thinks on an allowance: when the house cannot think, or the allowance is spent, it sits out.
+  if (!(await awake()).ok || (await db.machineSpent24h()) >= MACHINE_DAILY_CAP) return { won: false, gen: gen.gen };
   const s = await openSession(wallet, db.MACHINE_NICK);
   if (s.status !== 200) return { won: false, gen: gen.gen };
   const transcript: Turn[] = [];
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const message = await nextMessage(gen.policy, transcript);
+    let message: string;
+    try { message = await nextMessage(gen.policy, transcript); } catch { break; } // the allowance ran out mid-game
     const r = await runChat(String(s.body.session), message);
     if (r.status !== 200) return { won: false, gen: gen.gen };
     transcript.push(...(r.body.turns || []));

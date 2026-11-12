@@ -6,7 +6,7 @@ const api = async (path, opts) => {
   return j;
 };
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} } };
+const ls = { get: (k) => { try { return localStorage.getItem(k); } catch { return null; } }, set: (k, v) => { try { localStorage.setItem(k, v); } catch {} }, del: (k) => { try { localStorage.removeItem(k); } catch {} } };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const pop = (el) => { el.classList.remove('pop'); void el.offsetWidth; el.classList.add('pop'); };
 const money = (n) => `$${Number(n).toFixed(2)}`;
@@ -28,18 +28,58 @@ let balance = 0, state = null, session = null, word = 'cheese';
 
 async function readBalance() { try { balance = Number((await api('/balance/' + purse.address)).balance) || 0; } catch {} return balance; }
 function paintBalance(withPop) { $('#bal').textContent = money(balance); $('#cashbal').textContent = money(balance); if (withPop) pop($('#purse')); }
-/** testnet: the purse fills itself once so the first game can be staked. */
+
+// the chain, as little of it as the page needs. gas here is paid in the same dollars being sent, and
+// the most a transfer could cost is set aside before it runs, so "all of it" is never quite all of it.
+const TOKEN_ABI = ['function transfer(address,uint256) returns (bool)', 'function balanceOf(address) view returns (uint256)'];
+const chain = () => new ethers.JsonRpcProvider(state.rpc, state.chain, { staticNetwork: true });
+const tokenAs = (signer) => new ethers.Contract(state.token, TOKEN_ABI, signer);
+/** what one transfer to `to` will set aside for gas, in token units, with the exact limits to send it under. */
+async function feeFor(token, to) {
+  const [gas, fd] = await Promise.all([token.transfer.estimateGas(to, 1n), token.runner.provider.getFeeData()]);
+  const gasLimit = (gas * 13n) / 10n + 20000n;
+  const maxFeePerGas = fd.maxFeePerGas ?? fd.gasPrice ?? 0n;
+  const maxPriorityFeePerGas = fd.maxPriorityFeePerGas ?? 0n;
+  // the gas price is in attodollars (1e-18); the token has six decimals. round up.
+  const reserve = (gasLimit * maxFeePerGas + 10n ** 12n - 1n) / 10n ** 12n;
+  return { gasLimit, maxFeePerGas, maxPriorityFeePerGas, reserve };
+}
+/** a game needs the stake and a little for gas. two cents covers the worst case many times over. */
+const needed = () => (state?.stake ?? 0.25) + 0.02;
+
+/** play money only: the purse fills itself once so the first game can be staked. */
 async function fillIfEmpty() {
   await readBalance();
-  if (balance >= (state?.stake || 0.25)) return paintBalance(false);
-  status(`a welcome ${money(state?.grant ?? 1)} for your first games…`, 'busy');
+  if (!(state?.grant > 0) || balance >= needed()) return paintBalance(false);
+  status(`a welcome ${money(state.grant)} for your first games…`, 'busy');
   try { await api('/faucet', { method: 'POST', body: JSON.stringify({ address: purse.address }) }); } catch {}
-  for (let i = 0; i < 8 && balance < (state?.stake || 0.25); i++) { await sleep(2000); await readBalance(); }
+  for (let i = 0; i < 8 && balance < needed(); i++) { await sleep(2000); await readBalance(); }
   paintBalance(balance > 0); status('');
 }
 
+/** the page says what kind of money this is, once it knows. */
+function describeMoney() {
+  const real = !!state.real;
+  const price = $('#price');
+  if (price) price.textContent = real ? `${money(state.stake)} a game, from your purse.` : `play money. a new purse gets ${money(state.grant)} to start.`;
+  $('#cashabout').textContent = real
+    ? `real dollars (${state.symbol} on tempo), kept in this browser and nowhere else. each game stakes ${money(state.stake)}; most of it goes into the pot. copy your secret key and keep it somewhere safe: if this browser forgets it, the money is gone.`
+    : `test dollars, kept in this browser. they are worth nothing, but every stake and every payout is a real transaction. each game stakes ${money(state.stake)}; most of it goes into the pot.`;
+  const thinks = $('#thinks');
+  if (thinks) thinks.textContent = 'it buys each reply itself, out of the stakes. no api key anywhere.';
+  $('#addmoney').classList.toggle('hidden', !real);
+  $('#addr').textContent = purse.address;
+  $('#addhow').innerHTML = `send <b>${esc(state.symbol)}</b> on the <b>tempo</b> network to this address. only ${esc(state.symbol)}, only tempo: anything else will not show up here. a dollar is ${Math.floor(1 / needed())} games.`
+    + `<br><br>no ${esc(state.symbol)} yet? 1. open <a href="https://wallet.tempo.xyz" target="_blank" rel="noopener noreferrer">tempo wallet</a> (a passkey, no app). 2. press add funds there: card, bank or another chain. 3. send some to the address above. or use a <a href="https://tempo.xyz/developers/docs/partners/bridges" target="_blank" rel="noopener noreferrer">bridge</a>.`;
+}
+
 // one status line, between the thread and the keyboard
-function status(text, kind) { const el = $('#status'); el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : ''); }
+function status(text, kind) {
+  const el = $('#status');
+  // nothing else to say, and the house cannot pay for a reply: say that, before anyone types.
+  if (!text && state && state.awake === false && !state.learning) { text = `asleep: ${state.asleep}. no charge.`; kind = 'busy'; }
+  el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : '');
+}
 
 document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('active', x === b));
@@ -67,6 +107,8 @@ async function loadState() {
     status(`it learned something. generation ${state.gen}.`, 'ok');
     if (session) { note('it learned something mid-conversation. that game is over.'); end(); }
   } else if (wasLearning) status('');
+  // asleep: the house cannot pay for a reply right now. said up front, before anyone stakes.
+  if (!learning && state.awake === false && !sending && !$('#status').textContent) status('');
   wasLearning = !!learning;
   lastGen = state.gen;
   clearTimeout(poll); poll = setTimeout(loadState, learning ? 3000 : 10000);
@@ -95,13 +137,38 @@ const hideTyping = () => { typing?.remove(); typing = null; };
 
 /** the stake: the purse pays the house before the first message. */
 async function stake() {
-  const provider = new ethers.JsonRpcProvider(state.rpc, state.chain);
-  const signer = new ethers.Wallet(purse.key, provider);
-  const token = new ethers.Contract(state.token, ['function transfer(address,uint256) returns (bool)'], signer);
+  const token = tokenAs(new ethers.Wallet(purse.key, chain()));
   return (await token.transfer(state.house, ethers.parseUnits(state.stake.toFixed(6), 6))).hash;
 }
-const peek = () => api('/session?player=' + purse.address);
-const openSession = (stakeHash) => api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '', stake: stakeHash }) });
+/**
+ * a game is looked up by the purse that owns it, and the purse proves it by signing a short dated
+ * message. an address alone opens nothing: addresses are public, the key is not.
+ */
+let proofCache = null;
+async function proof() {
+  if (proofCache && Date.now() - proofCache.ts < 4 * 60_000) return proofCache;
+  const ts = Date.now();
+  const sig = await new ethers.Wallet(purse.key).signMessage(`say cheese purse: ${purse.address.toLowerCase()} ${ts}`);
+  return (proofCache = { ts, sig });
+}
+const peek = async () => { const p = await proof(); return api(`/session?player=${purse.address}&ts=${p.ts}&sig=${p.sig}`); };
+const openSession = async (stakeHash) => { const p = await proof(); return api('/session', { method: 'POST', body: JSON.stringify({ player: purse.address, nickname: ls.get('nick') || '', stake: stakeHash, ts: p.ts, sig: p.sig }) }); };
+/**
+ * a stake that has left the purse must become a game, whatever happens between the two. the hash is
+ * kept until the server has opened a session for it, so a dropped connection, a slow block or a closed
+ * tab costs a moment and never the stake. only the server saying that hash is no good lets go of it.
+ */
+async function openFor(hash) {
+  for (let i = 0; ; i++) {
+    try { const r = await openSession(hash); ls.del('pending'); return r; }
+    catch (e) {
+      const waiting = /not find the stake|failed to fetch|networkerror|load failed|something broke/i.test(e.message);
+      if (!waiting) { ls.del('pending'); throw e; }
+      if (i >= 5) throw new Error('your stake is safe. it has not shown up yet: send again in a moment.');
+      status('waiting for your stake to land…', 'busy'); await sleep(3000);
+    }
+  }
+}
 const showAbandon = () => { $('#abandon').classList.toggle('hidden', !session); disarm(); };
 function adopt(r) {
   session = { id: r.session, gen: r.gen, turnsLeft: r.resumed ? r.turnsLeft : state.max_turns };
@@ -116,13 +183,24 @@ function adopt(r) {
 async function ensureSession() {
   if (session) return;
   let r = await peek();
-  if (!r.session) {
-    if (balance < state.stake) await fillIfEmpty();
-    status(`putting ${money(state.stake)} in the pot…`, 'busy');
-    let hash;
-    try { hash = await stake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
-    status('confirming…', 'busy');
-    r = await openSession(hash);
+  if (r.session) ls.del('pending'); // one game per purse: an open game is where the last stake went
+  else {
+    let hash = ls.get('pending');
+    if (hash) status('picking your stake back up…', 'busy');
+    else {
+      if (state.closed) throw new Error('closed for now. nothing was charged.');
+      if (state.awake === false) throw new Error(`asleep: ${state.asleep}. no charge.`);
+      if (balance < needed()) await fillIfEmpty();
+      if (balance < needed()) {
+        if (state.real) openPurse();
+        throw new Error(state.real ? `add money to play: a game is ${money(state.stake)}.` : 'your purse is empty.');
+      }
+      status(`putting ${money(state.stake)} in the pot…`, 'busy');
+      try { hash = await stake(); } catch (e) { throw new Error('could not stake: ' + (e.shortMessage || e.message)); }
+      ls.set('pending', hash);
+      status('confirming…', 'busy');
+    }
+    r = await openFor(hash);
     tween($('#jackpot'), state.jackpot, r.jackpot, 700); pop($('#jackpot')); state.jackpot = r.jackpot;
     readBalance().then(() => paintBalance(false));
   }
@@ -130,7 +208,11 @@ async function ensureSession() {
 }
 /** on load: if there is a game open, the thread is waiting for you. */
 async function resumeIfOpen() {
-  try { const r = await peek(); if (r.session) adopt(r); } catch {}
+  try {
+    const r = await peek();
+    if (r.session) { ls.del('pending'); adopt(r); }
+    else if (ls.get('pending')) status('a game you paid for is waiting. say something.', 'ok');
+  } catch {}
 }
 
 /** the reply streams in over server-sent events; each token lands in the bubble as it arrives. */
@@ -182,8 +264,10 @@ function burst() {
 function celebrate(prize) {
   burst(); chime(); try { navigator.vibrate?.([40, 60, 120]); } catch {}
   const w = document.createElement('div'); w.className = 'win';
+  const brag = `i made an ai say ${word} and took the ${money(prize)} pot. it is rewriting its own rules because of me.\n${location.origin}`;
   w.innerHTML = `<div class="h1">it said it.</div><div class="money">${money(prize)}</div><div class="h2">yours. it lands once it's done learning why it lost.</div>
-    ${ls.get('nick') ? '' : `<div class="claim"><input id="nick" placeholder="your name for the board" maxlength="24"><button id="nickgo">claim it</button></div>`}`;
+    ${ls.get('nick') ? '' : `<div class="claim"><input id="nick" placeholder="your name for the board" maxlength="24"><button id="nickgo">claim it</button></div>`}
+    <a class="share" href="https://twitter.com/intent/tweet?text=${encodeURIComponent(brag)}" target="_blank" rel="noopener noreferrer">tell people</a>`;
   thread().appendChild(w); scrollDown();
   $('#nickgo')?.addEventListener('click', () => saveName($('#nick').value, $('#nickgo')));
   tween($('#jackpot'), state.jackpot, state.seed, 1200); state.jackpot = state.seed;
@@ -213,9 +297,10 @@ $('#form').addEventListener('submit', async (e) => {
   const text = $('#msg').value.trim(); if (!text || sending) return;
   sending = true; $('#send').disabled = true; $('#send').textContent = '···'; $('#msg').value = ''; $('#msg').style.height = '';
   try { navigator.vibrate?.(8); } catch {}
+  let posted = false;
   try {
     await ensureSession();
-    bubble('me', esc(text));
+    bubble('me', esc(text)); posted = true;
     showTyping();
     let it = null, acc = '';
     const r = await chatStream(text, (delta) => {
@@ -232,6 +317,8 @@ $('#form').addEventListener('submit', async (e) => {
     else status('');
   } catch (err) {
     hideTyping(); status(err.message, 'bad');
+    // a message that never reached the thread (no money yet, a stake still landing) goes back in the box.
+    if (!posted && !$('#msg').value) $('#msg').value = text;
     if (/learn|session is|run its course/.test(err.message)) end();
   }
   sending = false; $('#send').disabled = false; $('#send').textContent = 'send'; $('#msg').focus();
@@ -261,13 +348,14 @@ $('#again').onclick = () => { if ($('#again').disabled) return; thread().innerHT
 
 // history: a ledger of defeats. each row is a generation, the line that killed it, and what it learned.
 async function loadHistory() {
-  const { generations, wins, board } = await api('/history');
+  const [{ generations, wins, board }, th] = await Promise.all([api('/history'), api('/thoughts').catch(() => null)]);
   const byId = Object.fromEntries(wins.map((w) => [w.id, w]));
   const paid = wins.reduce((t, w) => t + (w.paid ? Number(w.prize) : 0), 0);
   $('#histstrip').innerHTML = [
     `<span class="cell"><b>gen ${state?.gen ?? generations.length - 1}</b></span>`,
     `<span class="cell gen">${wins.length} win${wins.length === 1 ? '' : 's'}</span>`,
     `<span class="cell gen">${money(paid)} paid</span>`,
+    th && th.thoughts ? `<a class="cell gen" ${th.recent[0]?.tx ? `href="${esc(th.explorer)}/tx/${esc(th.recent[0].tx)}" target="_blank" rel="noopener noreferrer"` : ''} title="what it has paid for its own replies. the link is its latest payment.">${money(th.spent)} on thinking</a>` : '',
     `<span class="cell gen right">🤖 always playing</span>`,
   ].join('');
 
@@ -297,24 +385,52 @@ async function loadHistory() {
   $('#board tbody').innerHTML = board.map((r) => `<tr><td>${esc(r.nickname || 'anonymous')}</td><td class="dim">gen ${r.highest_gen}</td><td class="dim">${r.wins}×</td><td class="money">${Number(r.won) > 0 ? money(r.won) : '—'}</td></tr>`).join('') || '<tr><td class="dim">nobody yet</td></tr>';
 }
 
-// cash out + name
-$('#purse').onclick = () => { sheet('#cashout', true); readBalance().then(() => paintBalance(false)); $('#cashstatus').textContent = ''; $('#cashnick').value = ls.get('nick') || ''; };
+// the purse: money in, money out, a name, and moving it between browsers
+function openPurse() { sheet('#cashout', true); readBalance().then(() => paintBalance(false)); $('#cashstatus').textContent = ''; $('#cashnick').value = ls.get('nick') || ''; disarmRestore(); }
+$('#purse').onclick = openPurse;
 $('#cashclose').onclick = () => sheet('#cashout', false);
 $('#cashnick').addEventListener('change', (e) => saveName(e.target.value));
 $('#cashkey').onclick = async () => { try { await navigator.clipboard.writeText(purse.key); $('#cashstatus').textContent = 'copied. keep it safe.'; } catch { prompt('your secret key', purse.key); } };
+$('#addrcopy').onclick = async () => { try { await navigator.clipboard.writeText(purse.address); $('#addrcopy').textContent = 'copied'; setTimeout(() => { $('#addrcopy').textContent = 'copy'; }, 1500); } catch { prompt('your purse address', purse.address); } };
 $('#cashsend').onclick = async () => {
   const to = $('#cashto').value.trim();
   if (!ethers.isAddress(to)) { $('#cashstatus').textContent = 'that does not look like an address.'; return; }
   if (balance <= 0) { $('#cashstatus').textContent = 'nothing to send yet.'; return; }
   $('#cashstatus').textContent = 'sending…'; $('#cashsend').disabled = true;
   try {
-    const provider = new ethers.JsonRpcProvider(state.rpc, state.chain);
-    const signer = new ethers.Wallet(purse.key, provider);
-    const token = new ethers.Contract(state.token, ['function transfer(address,uint256) returns (bool)', 'function balanceOf(address) view returns (uint256)'], signer);
-    const tx = await token.transfer(to, await token.balanceOf(purse.address)); await tx.wait();
-    $('#cashstatus').textContent = 'sent.'; await readBalance(); paintBalance(false);
+    const token = tokenAs(new ethers.Wallet(purse.key, chain()));
+    // gas comes out of the same dollars and is set aside first, so send everything but that.
+    const [have, fee] = await Promise.all([token.balanceOf(purse.address), feeFor(token, to)]);
+    if (have <= fee.reserve) throw new Error('there is less here than the network fee.');
+    const tx = await token.transfer(to, have - fee.reserve, { gasLimit: fee.gasLimit, maxFeePerGas: fee.maxFeePerGas, maxPriorityFeePerGas: fee.maxPriorityFeePerGas });
+    await tx.wait();
+    $('#cashstatus').textContent = 'sent. a fraction of a cent stays behind: the unspent part of the network fee.'; await readBalance(); paintBalance(false);
   } catch (e) { $('#cashstatus').textContent = 'could not send: ' + (e.shortMessage || e.message); }
   $('#cashsend').disabled = false;
 };
 
-loadState().then(() => { fillIfEmpty(); resumeIfOpen(); });
+/**
+ * use a purse from another browser: paste its secret key and this browser becomes that purse.
+ * two presses, because it replaces the purse that is here, and whatever is in that one is only
+ * reachable with its own key.
+ */
+let restoreArmed = null;
+function disarmRestore() { clearTimeout(restoreArmed); restoreArmed = null; const b = $('#restorego'); b.classList.remove('armed'); b.textContent = 'switch to it'; }
+$('#restorego').onclick = () => {
+  const raw = $('#restorekey').value.trim();
+  const key = /^[0-9a-fA-F]{64}$/.test(raw) ? '0x' + raw : raw;
+  let w = null;
+  try { if (/^0x[0-9a-fA-F]{64}$/.test(key)) w = new ethers.Wallet(key); } catch {}
+  if (!w) { $('#cashstatus').textContent = 'that is not a secret key.'; return; }
+  if (w.address.toLowerCase() === purse.address.toLowerCase()) { $('#cashstatus').textContent = 'that is the purse already here.'; return; }
+  if (!restoreArmed) {
+    $('#restorego').classList.add('armed'); $('#restorego').textContent = 'replace this purse?';
+    $('#cashstatus').textContent = balance >= 0.01 ? `this purse still holds ${money(balance)}. copy its key first, or that money stays behind.` : 'the purse here will be replaced.';
+    restoreArmed = setTimeout(disarmRestore, 6000);
+    return;
+  }
+  ls.set('key', w.privateKey); ls.set('address', w.address); ls.del('nick'); ls.del('pending');
+  location.reload();
+};
+
+loadState().then(() => { describeMoney(); fillIfEmpty(); resumeIfOpen(); });

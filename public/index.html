@@ -25,6 +25,8 @@
       <div class="intro" id="intro">
         <div class="h1">make it say <em>cheese</em>.</div>
         <div class="h2">it's been told not to. win the pot. it learns.</div>
+        <div class="h2" id="price"></div>
+        <div class="h2" id="thinks"></div>
       </div>
     </div>
     <div class="status" id="status"></div>
@@ -56,9 +58,14 @@
 
 <div class="sheet hidden" id="cashout">
   <div class="card">
-    <div class="h1">your winnings</div>
+    <div class="h1">your purse</div>
     <div class="money" id="cashbal">$0.00</div>
-    <p class="h2">real money, kept in this browser. each game stakes a little of it; most of the stake goes into the pot. send it somewhere, or copy your secret key to move it all.</p>
+    <p class="h2" id="cashabout"></p>
+    <div id="addmoney" class="hidden">
+      <div class="sub2">add money</div>
+      <div class="addr"><code id="addr"></code><button id="addrcopy">copy</button></div>
+      <p class="h2" id="addhow"></p>
+    </div>
     <input id="cashnick" placeholder="your name for the board" maxlength="24" autocomplete="off">
     <input id="cashto" placeholder="send to…" spellcheck="false" autocomplete="off">
     <div class="row">
@@ -66,6 +73,11 @@
       <button class="ghost" id="cashkey">copy key</button>
       <button class="ghost" id="cashclose">done</button>
     </div>
+    <details class="other">
+      <summary>use a purse from another browser</summary>
+      <input id="restorekey" type="password" placeholder="paste its secret key" spellcheck="false" autocomplete="off">
+      <div class="row"><button class="ghost" id="restorego">switch to it</button></div>
+    </details>
     <div class="h2" id="cashstatus"></div>
   </div>
 </div>

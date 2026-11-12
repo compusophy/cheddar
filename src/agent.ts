@@ -1,50 +1,43 @@
-import { GoogleGenAI, type Content } from '@google/genai';
+/** the model. it only talks; `think.ts` is how each thing it says gets paid for. */
+import { ask, PATCH_MAX_PRICE, type Msg } from './think';
 
-export const MODEL = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+const env = (k: string) => (process.env[k] || '').trim();
+/** the model that plays. small and quick: it is paid for per reply, and a game is up to 25 of them. */
+export const MODEL = env('MODEL') || 'google/gemini-2.5-flash-lite';
+/** the model that rewrites the rules after a loss. a few calls per win, so it can be a better one. */
+export const PATCH_MODEL = env('PATCH_MODEL') || 'google/gemini-3.8-flash';
+/** the model behind the machine player. */
+export const MACHINE_MODEL = env('MACHINE_MODEL') || MODEL;
 export const MAX_TURNS = 25; // a cost ceiling per stake, never shown as a score
 export const MAX_MESSAGE_CHARS = 1000;
-
-let ai: GoogleGenAI | null = null;
-export function getAI() {
-  if (!ai) ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY as string });
-  return ai;
-}
+/** a reply is a few sentences. the seller prices a call by the most it could cost, so this is also the price. */
+const REPLY_TOKENS = Math.max(64, Number(env('REPLY_TOKENS')) || 240);
 
 export type Turn = { role: 'user' | 'agent'; text: string };
+export type Purpose = 'chat' | 'machine' | 'machine-lesson' | 'test';
 
-const toContents = (history: Turn[]): Content[] =>
-  history.map((t) => ({ role: t.role === 'user' ? 'user' : 'model', parts: [{ text: t.text }] }));
+const toMessages = (system: string, history: Turn[]): Msg[] => [
+  { role: 'system', content: system },
+  ...history.map((t): Msg => ({ role: t.role === 'user' ? 'user' : 'assistant', content: t.text })),
+];
+const systemOf = (policy: string, preamble: string) => preamble + policy + '\n\nkeep every reply to a few sentences.';
 
 /** one exchange under the given policy. no tools: the ai only talks. */
-export async function step(policy: string, history: Turn[], userMessage: string, preamble = ''): Promise<Turn[]> {
+export async function step(policy: string, history: Turn[], userMessage: string, preamble = '', purpose: Purpose = 'chat'): Promise<Turn[]> {
   const user: Turn = { role: 'user', text: userMessage };
-  const res = await getAI().models.generateContent({
-    model: MODEL,
-    contents: toContents([...history, user]),
-    config: {
-      systemInstruction: preamble + policy + '\n\nkeep every reply to a few sentences.',
-      maxOutputTokens: 1024, // gemini 3 counts thinking against this budget
-      thinkingConfig: { thinkingLevel: 'low' as any },
-    },
-  });
-  return [user, { role: 'agent', text: (res.text || '').trim() || '...' }];
+  const text = await ask({ model: MODEL, messages: toMessages(systemOf(policy, preamble), [...history, user]), maxTokens: REPLY_TOKENS, purpose });
+  return [user, { role: 'agent', text: text.trim() || '...' }];
 }
 
 /** same exchange, but the reply streams: `onDelta` gets each chunk as the model produces it. */
-export async function stepStream(policy: string, history: Turn[], userMessage: string, onDelta: (t: string) => void, preamble = ''): Promise<Turn[]> {
+export async function stepStream(policy: string, history: Turn[], userMessage: string, onDelta: (t: string) => void, preamble = '', purpose: Purpose = 'chat'): Promise<Turn[]> {
   const user: Turn = { role: 'user', text: userMessage };
-  const stream = await getAI().models.generateContentStream({
-    model: MODEL,
-    contents: toContents([...history, user]),
-    config: {
-      systemInstruction: preamble + policy + '\n\nkeep every reply to a few sentences.',
-      maxOutputTokens: 1024,
-      thinkingConfig: { thinkingLevel: 'low' as any },
-    },
-  });
-  let text = '';
-  for await (const chunk of stream) { const t = chunk.text || ''; if (t) { text += t; onDelta(t); } }
+  const text = await ask({ model: MODEL, messages: toMessages(systemOf(policy, preamble), [...history, user]), maxTokens: REPLY_TOKENS, purpose, onDelta });
   return [user, { role: 'agent', text: text.trim() || '...' }];
 }
+
+/** a single prompt, a single answer. the patcher, the lesson and the machine's next move all use this. */
+export const say = (model: string, prompt: string, maxTokens: number, purpose: 'patch' | 'lesson' | 'machine' | 'machine-lesson', big = false) =>
+  ask({ model, messages: [{ role: 'user', content: prompt }], maxTokens, purpose, ...(big ? { maxPrice: PATCH_MAX_PRICE } : {}) });
 
 export const renderTranscript = (t: Turn[]) => t.map((x) => `${x.role === 'user' ? 'USER' : 'AI'}: ${x.text}`).join('\n');

@@ -1,16 +1,16 @@
 import { createWalletClient, createPublicClient, http, defineChain, encodeFunctionData, parseUnits, formatUnits, isAddress, decodeEventLog } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { net } from './net';
 
-export const TEMPO_RPC = 'https://rpc.moderato.tempo.xyz';
-export const PATH_USD = '0x20c0000000000000000000000000000000000000' as const;
-export const EXPLORER = 'https://explore.moderato.tempo.xyz';
+/** the stablecoin every stake and prize is paid in, on whichever network this deployment runs. */
+const TOKEN = net.token;
 
 export const tempoChain = defineChain({
-  id: 42431,
-  name: 'tempo moderato',
-  network: 'moderato',
+  id: net.chainId,
+  name: `tempo ${net.name}`,
+  network: net.name,
   nativeCurrency: { name: 'USD', symbol: 'USD', decimals: 18 },
-  rpcUrls: { default: { http: [TEMPO_RPC] }, public: { http: [TEMPO_RPC] } },
+  rpcUrls: { default: { http: [net.rpc] }, public: { http: [net.rpc] } },
 });
 
 const erc20Abi = [
@@ -38,11 +38,11 @@ if (!isValidHexKey(rawKey)) {
 const account = privateKeyToAccount(rawKey);
 agentAddress = account.address;
 walletClient = createWalletClient({ account, chain: tempoChain, transport: http() });
-console.log(`[treasury] agent wallet ${agentAddress}`);
+console.log(`[treasury] agent wallet ${agentAddress} on ${net.name} (${net.symbol}${net.real ? ', REAL MONEY' : ''})`);
 
 export async function balance(address: `0x${string}` = agentAddress): Promise<string> {
   try {
-    const raw = await publicClient.readContract({ address: PATH_USD, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
+    const raw = await publicClient.readContract({ address: TOKEN, abi: erc20Abi, functionName: 'balanceOf', args: [address] });
     return formatUnits(raw, 6);
   } catch (e) {
     console.error('[treasury] balance error', (e as Error).message);
@@ -52,15 +52,15 @@ export async function balance(address: `0x${string}` = agentAddress): Promise<st
 
 export type PayResult = { ok: true; hash: string } | { ok: false; error: string };
 
-/** sends pathUSD from the agent wallet on tempo. every call moves real testnet money. */
+/** sends the stablecoin from the agent wallet on tempo. every call moves money; on mainnet, real money. */
 export async function pay(to: string, amount: string): Promise<PayResult> {
   if (!isAddress(to)) return { ok: false, error: 'invalid recipient address' };
   const n = Number(amount);
   if (!Number.isFinite(n) || n <= 0) return { ok: false, error: 'invalid amount' };
   try {
     const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [to as `0x${string}`, parseUnits(n.toFixed(6), 6)] });
-    const hash = await walletClient!.sendTransaction({ to: PATH_USD, data, account, chain: tempoChain });
-    console.log(`[treasury] paid ${n} pathUSD to ${to}: ${hash}`);
+    const hash = await walletClient!.sendTransaction({ to: TOKEN, data, account, chain: tempoChain });
+    console.log(`[treasury] paid ${n} ${net.symbol} to ${to}: ${hash}`);
     return { ok: true, hash };
   } catch (e) {
     console.error('[treasury] pay error', (e as Error).message);
@@ -79,7 +79,7 @@ export async function verifyTransfer(hash: string, from: string, to: string, amo
     if (receipt.status !== 'success') return { ok: false, error: 'stake transaction failed' };
     const want = parseUnits(amount.toFixed(6), 6);
     for (const log of receipt.logs) {
-      if (log.address.toLowerCase() !== PATH_USD.toLowerCase()) continue;
+      if (log.address.toLowerCase() !== TOKEN.toLowerCase()) continue;
       try {
         const ev = decodeEventLog({ abi: erc20Abi, data: log.data, topics: log.topics, eventName: 'Transfer' });
         if (ev.args.from.toLowerCase() === from.toLowerCase() && ev.args.to.toLowerCase() === to.toLowerCase() && ev.args.value >= want) return { ok: true };
@@ -91,14 +91,36 @@ export async function verifyTransfer(hash: string, from: string, to: string, amo
   }
 }
 
-/** tempo testnet faucet, same two-step fallback say cheese used. */
+/** who sent at least `amount` to `to` in this transaction. the proven payer, read from the chain rather than from what a caller says. */
+export async function senderOf(hash: string, to: string, amount: number): Promise<`0x${string}` | null> {
+  try {
+    const receipt = await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout: 20_000 });
+    if (receipt.status !== 'success') return null;
+    const want = parseUnits(amount.toFixed(6), 6);
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== TOKEN.toLowerCase()) continue;
+      try {
+        const ev = decodeEventLog({ abi: erc20Abi, data: log.data, topics: log.topics, eventName: 'Transfer' });
+        if (ev.args.to.toLowerCase() === to.toLowerCase() && ev.args.value >= want) return ev.args.from;
+      } catch { /* not a transfer */ }
+    }
+  } catch { /* not found in time */ }
+  return null;
+}
+
+/** tempo testnet faucet, same two-step fallback say cheese used. there is no such thing on mainnet. */
 export async function faucet(address: string): Promise<{ status: number; body: unknown }> {
+  if (net.real) return { status: 400, body: { error: 'no faucet on mainnet: fund the house wallet yourself' } };
   const lower = address.toLowerCase();
-  let r = await fetch('https://docs.tempo.xyz/api/faucet', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: lower }) });
-  let text = await r.text();
-  let body: any; try { body = JSON.parse(text); } catch { body = { error: text }; }
-  if (!r.ok || body?.error) {
-    r = await fetch(TEMPO_RPC, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+  // the docs faucet first; if it answers no, or does not answer at all, the node's own faucet method.
+  let r: Response | null = null, text = '', body: any = { error: 'unreachable' };
+  try {
+    r = await fetch('https://docs.tempo.xyz/api/faucet', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ address: lower }) });
+    text = await r.text();
+    try { body = JSON.parse(text); } catch { body = { error: text }; }
+  } catch (e) { r = null; body = { error: (e as Error).message }; }
+  if (!r || !r.ok || body?.error) {
+    r = await fetch(net.rpc, { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ jsonrpc: '2.0', method: 'tempo_fundAddress', params: [lower], id: 1 }) });
     text = await r.text();
     try { body = JSON.parse(text); } catch { body = { error: text }; }

@@ -5,7 +5,8 @@ import { GEN0, DAILY_CAP, JACKPOT_SEED } from './game';
 const url = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 if (!url) throw new Error('[db] DATABASE_URL missing');
 // onnotice: neon emits 'relation already exists' NOTICEs on every cold start from CREATE TABLE IF NOT EXISTS
-export const sql = postgres(url, { max: 5, idle_timeout: 20, prepare: false, onnotice: () => {} });
+// DB_POOL: connections per instance. 1 for a local single-session database such as pglite.
+export const sql = postgres(url, { max: Math.max(1, Number(process.env.DB_POOL) || 5), idle_timeout: 20, prepare: false, onnotice: () => {} });
 
 let ready: Promise<void> | null = null;
 export function init(): Promise<void> {
@@ -40,7 +41,16 @@ export function init(): Promise<void> {
     await sql`CREATE TABLE IF NOT EXISTS jackpot (id INT PRIMARY KEY DEFAULT 1, amount DOUBLE PRECISION NOT NULL)`;
     await sql`INSERT INTO jackpot (id, amount) VALUES (1, ${JACKPOT_SEED}) ON CONFLICT DO NOTHING`;
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ`;
+    // how much of a win has left the house so far. a prize bigger than a daily cap is paid in parts.
+    await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS paid DOUBLE PRECISION NOT NULL DEFAULT 0`;
     await sql`ALTER TABLE generations ADD COLUMN IF NOT EXISTS lesson TEXT`;
+    // every thought the ai paid for: what it was for, which model, what it cost, and the payment that bought it.
+    await sql`CREATE TABLE IF NOT EXISTS thoughts (
+      id SERIAL PRIMARY KEY, purpose TEXT NOT NULL, model TEXT NOT NULL, amount DOUBLE PRECISION NOT NULL,
+      tx_hash TEXT, created_at TIMESTAMPTZ DEFAULT now())`;
+    await sql`CREATE INDEX IF NOT EXISTS thoughts_at ON thoughts (created_at)`;
+    // a stake can arrive as a machine payment (an agent paying over http 402) instead of a purse transfer.
+    await sql`ALTER TABLE stakes ADD COLUMN IF NOT EXISTS via TEXT`;
     await sql`INSERT INTO generations (gen, policy) VALUES (0, ${GEN0}) ON CONFLICT DO NOTHING`;
   })().catch((e) => { ready = null; throw e; }); // a failed init must not poison the instance
   return ready;
@@ -65,16 +75,75 @@ export async function reserveDisbursement(recipient: string, amount: number, ses
     return { ok: true as const, id: row.id };
   }) as any;
 }
+/**
+ * reserve as much of `want` as both caps allow right now: the house's daily cap and this purse's.
+ * a prize can be bigger than a cap (the pot has no ceiling, the caps do), and a reservation that is
+ * all-or-nothing would leave such a prize unpayable for ever. this one grants a part and says how much;
+ * the rest stays owed and is paid as the window rolls. less than a cent of headroom is not worth a
+ * transfer, unless a cent is more than what is owed.
+ */
+export async function reserveUpTo(recipient: string, want: number, purseCap: number, sessionId: string | null): Promise<{ ok: true; id: number; amount: number } | { ok: false; why: string }> {
+  const who = recipient.toLowerCase();
+  return sql.begin(async (tx) => {
+    await tx`LOCK TABLE disbursements IN SHARE ROW EXCLUSIVE MODE`;
+    const [g] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM disbursements WHERE created_at > now() - interval '1 day'`;
+    const [p] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM disbursements WHERE recipient = ${who} AND created_at > now() - interval '1 day'`;
+    const house = DAILY_CAP - Number(g.total), purse = purseCap - Number(p.total);
+    const amount = Math.floor(Math.min(want, house, purse) * 1e6 + 1e-6) / 1e6;
+    if (!(amount > 0) || amount < Math.min(want, 0.01) - 1e-9) return { ok: false as const, why: house <= purse ? 'daily cap' : 'purse daily cap' };
+    const [row] = await tx<{ id: number }[]>`INSERT INTO disbursements (recipient, amount, tx_hash, session_id) VALUES (${who}, ${amount}, NULL, ${sessionId}) RETURNING id`;
+    return { ok: true as const, id: row.id, amount };
+  }) as any;
+}
 export const settleReservation = (id: number, txHash: string) => sql`UPDATE disbursements SET tx_hash = ${txHash} WHERE id = ${id}`;
 export const releaseReservation = (id: number) => sql`DELETE FROM disbursements WHERE id = ${id}`;
 
+// ---------- thinking money: the ai pays for its own inference, one payment per thought ----------
+
+/**
+ * set aside the price of one thought before paying for it, so two functions cannot both spend the
+ * last of the day's allowance. `cap` is the whole house's limit; `purposeCap` is a tighter one for a
+ * single purpose (the machine has its own pocket money). returns the row to settle, or why not.
+ */
+export async function reserveThought(purpose: string, model: string, amount: number, cap: number, purposeCap?: number): Promise<{ ok: true; id: number } | { ok: false; why: string }> {
+  return sql.begin(async (tx) => {
+    await tx`LOCK TABLE thoughts IN SHARE ROW EXCLUSIVE MODE`;
+    const [g] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM thoughts WHERE created_at > now() - interval '1 day'`;
+    if (Number(g.total) + amount > cap + 1e-9) return { ok: false as const, why: 'today\x27s thinking budget is spent' };
+    if (purposeCap !== undefined) {
+      const [p] = await tx<{ total: number }[]>`SELECT COALESCE(SUM(amount), 0)::float AS total FROM thoughts WHERE purpose = ${purpose} AND created_at > now() - interval '1 day'`;
+      if (Number(p.total) + amount > purposeCap + 1e-9) return { ok: false as const, why: `today's ${purpose} budget is spent` };
+    }
+    const [row] = await tx<{ id: number }[]>`INSERT INTO thoughts (purpose, model, amount) VALUES (${purpose}, ${model}, ${amount}) RETURNING id`;
+    return { ok: true as const, id: row.id };
+  }) as any;
+}
+export const settleThought = (id: number, txHash: string | null) => sql`UPDATE thoughts SET tx_hash = ${txHash} WHERE id = ${id}`;
+export const releaseThought = (id: number) => sql`DELETE FROM thoughts WHERE id = ${id}`;
+export const thoughtSpent24h = async (purpose?: string) => Number((purpose
+  ? await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE purpose = ${purpose} AND created_at > now() - interval '1 day'`
+  : await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE created_at > now() - interval '1 day'`)[0].t);
+/** everything the machine has cost today: its own games and the lessons its wins set off. */
+export const machineSpent24h = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM thoughts WHERE purpose IN ('machine', 'machine-lesson') AND created_at > now() - interval '1 day'`)[0].t);
+/** what thinking has cost, by purpose. */
+export async function thoughtBooks() {
+  const rows = await sql<any[]>`SELECT purpose, COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS spent,
+    COALESCE(SUM(CASE WHEN created_at > now() - interval '1 day' THEN amount ELSE 0 END),0)::float AS spent_24h FROM thoughts GROUP BY purpose ORDER BY purpose`;
+  const total = rows.reduce((a, r) => a + Number(r.spent), 0), day = rows.reduce((a, r) => a + Number(r.spent_24h), 0), n = rows.reduce((a, r) => a + r.n, 0);
+  return { thoughts: n, spent: Math.round(total * 1e6) / 1e6, spent_24h: Math.round(day * 1e6) / 1e6, by_purpose: rows.map((r) => ({ purpose: r.purpose, thoughts: r.n, spent: Number(r.spent), spent_24h: Number(r.spent_24h) })) };
+}
+/** the last few payments the ai made for its own thoughts, newest first. public: they are on chain anyway. */
+export const recentThoughts = (limit = 12) => sql<{ purpose: string; model: string; amount: number; tx_hash: string | null; created_at: string }[]>`
+  SELECT purpose, model, amount, tx_hash, created_at FROM thoughts WHERE tx_hash IS NOT NULL ORDER BY id DESC LIMIT ${limit}`;
+
 // ---------- the jackpot ----------
 
-export const jackpot = async () => Number((await sql<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1`)[0]?.amount ?? 0);
+/** the pot, to the millionth of a dollar: sums of binary floats are not shown to people. */
+export const jackpot = async () => Math.round(Number((await sql<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1`)[0]?.amount ?? 0) * 1e6) / 1e6;
 /** a stake landed: record it and grow the pot. one transaction, so a stake is never counted twice or lost. */
-export const recordStake = (sessionId: string, player: string, amount: number, txHash: string, toPot: number) =>
+export const recordStake = (sessionId: string, player: string, amount: number, txHash: string, toPot: number, via: string | null = null) =>
   sql.begin(async (tx) => {
-    await tx`INSERT INTO stakes (session_id, player, amount, tx_hash) VALUES (${sessionId}, ${player.toLowerCase()}, ${amount}, ${txHash})`;
+    await tx`INSERT INTO stakes (session_id, player, amount, tx_hash, via) VALUES (${sessionId}, ${player.toLowerCase()}, ${amount}, ${txHash}, ${via})`;
     await tx`UPDATE jackpot SET amount = amount + ${toPot} WHERE id = 1`;
   });
 /** take the whole pot for a win and reseed it. returns what was taken. atomic, so two wins cannot both take it. */
@@ -96,13 +165,18 @@ export const markFaucet = (player: string) => sql`INSERT INTO locks (name, holde
 export const wonLast24h = async (player: string) =>
   Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM breaches WHERE player = ${player.toLowerCase()} AND paid_at > now() - interval '1 day'`)[0].t);
 export const stakeSeen = async (txHash: string) => (await sql`SELECT 1 FROM stakes WHERE tx_hash = ${txHash}`).length > 0;
-export const markPaid = (winId: number, amount: number, txHash: string) => sql`UPDATE breaches SET amount = ${amount}, tx_hash = ${txHash}, paid_at = now() WHERE id = ${winId}`;
+export const markPaid = (winId: number, amount: number, txHash: string) => sql`UPDATE breaches SET amount = ${amount}, paid = ${amount}, tx_hash = ${txHash}, paid_at = now() WHERE id = ${winId}`;
+/** one transfer towards a win. the win carries a tx hash only once it is paid in full: that is what "paid" means everywhere else. */
+export const addPayment = (winId: number, amount: number, txHash: string) => sql`
+  UPDATE breaches SET paid = paid + ${amount}, paid_at = now(),
+    tx_hash = CASE WHEN paid + ${amount} >= amount - 0.000001 THEN ${txHash} ELSE tx_hash END
+  WHERE id = ${winId}`;
 export const stakedLast24h = async () => Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount),0)::float AS t FROM stakes WHERE created_at > now() - interval '1 day'`)[0].t);
 
 // ---------- generations, sessions, breaches ----------
 
 export type Generation = { id: number; gen: number; policy: string; lesson: string | null; parent_breach_id: number | null; hardening_rounds: number; regression_passed: number; legit_passed: number; created_at: string };
-export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string };
+export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; paid?: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string };
 export type SessionRow = { id: string; gen: number; player: string; nickname: string | null; transcript: string; turns: number; status: string; created_at: string; updated_at: string };
 
 export const currentGeneration = async () => (await sql<Generation[]>`SELECT * FROM generations ORDER BY gen DESC LIMIT 1`)[0];
@@ -127,6 +201,25 @@ export const markAutoimmune = (id: number) => sql`UPDATE breaches SET autoimmune
 export const allBreaches = () => sql<Breach[]>`SELECT * FROM breaches ORDER BY id ASC`;
 export const breachesForGen = (gen: number) => sql<Breach[]>`SELECT * FROM breaches WHERE gen = ${gen} ORDER BY id ASC`;
 export const breachById = async (id: number) => (await sql<Breach[]>`SELECT * FROM breaches WHERE id = ${id}`)[0];
+
+/**
+ * wins that are owed and not yet paid, oldest first. a payout can be put off (a daily cap, a failed
+ * transfer, payouts switched off) and nothing else would ever come back for it, so these are swept.
+ * only wins whose lesson has been learned count: a win is paid after the next generation exists.
+ */
+export const unpaidWins = () => sql<Breach[]>`
+  SELECT b.* FROM breaches b JOIN generations g ON g.gen = b.gen + 1
+  WHERE b.amount > 0 AND b.tx_hash IS NULL ORDER BY b.id ASC LIMIT 20`;
+/** the books: what came in, what went out, what is still owed. */
+export async function books() {
+  const [s] = await sql<any[]>`SELECT COUNT(*)::int AS games, COALESCE(SUM(amount),0)::float AS staked FROM stakes`;
+  const [p] = await sql<any[]>`SELECT COUNT(*)::int AS wins, COALESCE(SUM(CASE WHEN tx_hash IS NOT NULL THEN amount ELSE paid END),0)::float AS paid FROM breaches WHERE amount > 0`;
+  const [o] = await sql<any[]>`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount - paid),0)::float AS owed FROM breaches WHERE tx_hash IS NULL AND amount > 0`;
+  const [d] = await sql<any[]>`SELECT COUNT(DISTINCT player)::int AS players FROM stakes`;
+  const r6 = (n: number) => Math.round(Number(n) * 1e6) / 1e6;
+  const [m] = await sql<any[]>`SELECT COUNT(*)::int AS n FROM stakes WHERE via = 'mpp'`;
+  return { games: s.games, games_by_agents: m.n, players: d.players, staked: r6(s.staked), wins: p.wins, paid: r6(p.paid), unpaid_wins: o.n, owed: r6(o.owed), staked_24h: r6(await stakedLast24h()), paid_24h: r6(await spentLast24h()) };
+}
 
 /** a win that never produced the generation after it: unfinished business. */
 export const unfinishedWin = async () => (await sql<Breach[]>`
@@ -192,7 +285,7 @@ export const markBotTick = () => sql`INSERT INTO locks (name, holder, taken_at) 
 
 /** wipe everything and reseed generation 0. drops the old per-tier tables too, so a redeploy over the previous schema is clean. */
 export async function resetDb() {
-  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
+  for (const t of ['regression_runs', 'breaches', 'sessions', 'generations', 'disbursements', 'locks', 'stakes', 'jackpot', 'rate_hits', 'thoughts', 'po_registry', 'invoices']) await sql.unsafe(`DROP TABLE IF EXISTS ${t}`);
   ready = null;
   await init();
 }

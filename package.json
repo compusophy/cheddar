@@ -1,23 +1,25 @@
 {
   "name": "cheddar",
   "version": "0.1.0",
-  "description": "an ai treasurer holding real testnet stablecoins. talk it into paying you. every theft makes it stronger.",
+  "description": "make an ai say the word. it pays for its own thoughts, and every win makes it harder to beat.",
   "license": "MIT",
   "scripts": {
     "start": "ts-node src/server.ts",
     "dev": "ts-node src/server.ts",
     "keygen": "ts-node scripts/keygen.ts",
     "reset": "ts-node scripts/reset.ts",
-    "test": "ts-node scripts/test.ts"
+    "test": "ts-node scripts/test.ts",
+    "seller": "ts-node scripts/seller.ts",
+    "think": "ts-node scripts/think.ts"
   },
   "dependencies": {
-    "@google/genai": "^1.46.0",
     "@vercel/functions": "^3.9.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
+    "mppx": "^0.18.0",
     "postgres": "^3.4.9",
-    "viem": "^2.47.5"
+    "viem": "^2.57.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
