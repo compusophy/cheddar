@@ -197,3 +197,6 @@ a.receipt::after { content: ' ↗'; }
 a.prize { text-decoration: none; }
 a.prize::after { content: ' ↗'; }
 .win .receipt.paid { display: block; margin: var(--h) 0 0; color: var(--green); font-size: 1em; }
+/* money won and not yet sent: said in the same place as the money that was */
+.win .owed { margin: var(--h) 0 0; color: var(--gold); font-size: 0.9em; line-height: 1.4; }
+.sheet .owed { color: var(--gold); }

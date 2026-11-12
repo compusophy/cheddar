@@ -13,6 +13,8 @@ dotenv.config();
 const url = process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
 if (!/@(127\.0\.0\.1|localhost)[:/]/.test(url)) { console.error('refusing to run: DATABASE_URL is not a local database. this test writes fake wins.'); process.exit(2); }
 if ((process.env.NETWORK || 'testnet').toLowerCase() !== 'testnet') { console.error('refusing to run: this test only runs on the testnet.'); process.exit(2); }
+// one purse may be paid three cents a day here, so a five cent prize has to come in two parts.
+process.env.PURSE_DAILY_CAP = '0.03';
 // after the checks, on purpose: these connect to whatever the environment names.
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import * as db from '../src/db';
@@ -28,12 +30,12 @@ const fresh = () => privateKeyToAccount(generatePrivateKey()).address.toLowerCas
 const PRIZE = 0.01;
 
 /** a win that is owed: its lesson is learned (the next generation exists), nothing has been paid. */
-async function owedWin(player: string, tag: string) {
+async function owedWin(player: string, tag: string, amount = PRIZE) {
   const gen = (await db.currentGeneration()).gen;
   await db.createGeneration(gen + 1, `test rules after ${tag}`, 0, 1, true, true, null);
   await db.createSession(`payout-${tag}`, gen, player, null);
   await db.updateSession(`payout-${tag}`, [], 1, 'won');
-  return db.recordBreach({ gen, session_id: `payout-${tag}`, player, nickname: null, recipient: player, amount: PRIZE, tx_hash: null, transcript: '[]' });
+  return db.recordBreach({ gen, session_id: `payout-${tag}`, player, nickname: null, recipient: player, amount, tx_hash: null, transcript: '[]' });
 }
 const bal = async (a: string) => Number(await treasury.balance(a as `0x${string}`));
 
@@ -89,6 +91,27 @@ async function main() {
   const [d, e] = [fresh(), fresh()];
   const both = await Promise.all([treasury.pay(d, '0.01'), treasury.pay(e, '0.01')]);
   check('both land: there is no shared counter for them to collide on', both.every((x) => x.ok) && Math.abs((await bal(d)) - 0.01) < 1e-9 && Math.abs((await bal(e)) - 0.01) < 1e-9, JSON.stringify(both));
+
+  console.log('a prize bigger than the purse may be paid in a day');
+  const f = fresh();
+  const winF = await owedWin(f, 'f', 0.05);
+  r = await settleUnpaid();
+  let parts = await db.paymentsFor(winF);
+  check('the first sweep pays what the day allows, and holds the rest', r.held.some((h) => h.id === winF) && Math.abs((await bal(f)) - 0.03) < 1e-9, JSON.stringify({ r, bal: await bal(f) }));
+  check('the win is not marked paid, and says what has been sent so far', !(await db.breachById(winF))!.tx_hash && parts.length === 1 && Math.abs(Number(parts[0].amount) - 0.03) < 1e-9, JSON.stringify(parts));
+  check('the purse is still owed the rest', Math.abs((await db.owedTo(f)) - 0.02) < 1e-9, String(await db.owedTo(f)));
+  const next = await db.payableAt(f, 0.03);
+  const hours = next.at ? (next.at.getTime() - Date.now()) / 3600_000 : NaN;
+  check('and can be told when it comes: when that payment is a day old', next.held === 'purse daily cap' && hours > 23.9 && hours <= 24, JSON.stringify({ held: next.held, hours }));
+  r = await settleUnpaid();
+  check('sweeping again the same day sends nothing more', Math.abs((await bal(f)) - 0.03) < 1e-9, String(await bal(f)));
+  await db.sql`UPDATE disbursements SET created_at = now() - interval '25 hours' WHERE recipient = ${f}`;
+  check('a day on there is room again', (await db.payableAt(f, 0.03)).at === null);
+  r = await settleUnpaid();
+  w = (await db.breachById(winF))!;
+  parts = await db.paymentsFor(winF);
+  check('and the rest is sent: two payments, the whole prize, the win marked paid', r.paid.includes(winF) && !!w.tx_hash && parts.length === 2 && Math.abs((await bal(f)) - 0.05) < 1e-9, JSON.stringify({ r, parts, bal: await bal(f) }));
+  check('nothing is owed to it any more', (await db.owedTo(f)) === 0);
 
   console.log(`\n${passed} passed, ${failures.length} failed`);
   await db.sql.end();

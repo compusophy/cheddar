@@ -7,7 +7,7 @@ import { isAddress, verifyMessage } from 'viem';
 import * as db from './db';
 import { MAX_TURNS, MAX_MESSAGE_CHARS, MODEL } from './agent';
 import * as think from './think';
-import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED, GRANT, GRANTS_PER_DAY, GRANTS_PER_VISITOR } from './game';
+import { WORD, STAKE, JACKPOT_SHARE, JACKPOT_SEED, GRANT, GRANTS_PER_DAY, GRANTS_PER_VISITOR, DAILY_CAP, PURSE_DAILY_CAP } from './game';
 import { network } from './visitor';
 import { openSession, runChat, peek, abandon, resumeHardening, settleUnpaid } from './chat';
 import * as treasury from './treasury';
@@ -81,7 +81,7 @@ async function makeState() {
   };
 }
 /** unfinished business (a lesson cut short, the machine's turn) is looked at as pages come in, but not on every one. */
-let lastKick = 0;
+let lastKick = 0, lastSweep = 0;
 app.get('/api/state', async (req, res) => {
   // every open page asks this every few seconds, and it is the same answer for all of them. the
   // platform's cache may hand it out for two seconds, so a thousand open tabs are one question
@@ -94,7 +94,14 @@ app.get('/api/state', async (req, res) => {
     stateMaking ||= makeState().then((body) => { stateKept = { at: Date.now(), stamp, body }; return body; }).finally(() => { stateMaking = null; });
     res.json(await stateMaking);
   } else res.json(stateKept!.body);
-  if (Date.now() - lastKick > 5000) { lastKick = Date.now(); keep(resumeHardening().then(() => bot.maybeTick())); }
+  if (Date.now() - lastKick > 5000) {
+    lastKick = Date.now();
+    // and once a minute, prize money that is still owed: a part held back by a daily cap is sent
+    // when the cap has room again, without waiting for the timer to come round.
+    const sweep = Date.now() - lastSweep > 60_000;
+    if (sweep) lastSweep = Date.now();
+    keep(resumeHardening().then(() => bot.maybeTick()).then(() => (sweep ? settleUnpaid() : undefined)).catch((e) => console.error('[kick]', (e as Error).message)));
+  }
 });
 /**
  * the history page: every generation, and for each the conversation that produced it. the totals
@@ -121,7 +128,11 @@ app.get('/api/history', async (_req, res) => {
 /** the player's winnings. the address is the browser's own; it is never shown. */
 app.get('/api/balance/:address', async (req, res) => {
   if (!isAddress(req.params.address)) return res.status(400).json({ error: 'bad wallet' });
-  res.json({ balance: await treasury.balance(req.params.address as `0x${string}`) });
+  // with it, anything the house still owes this purse from a win, and when the next of it comes.
+  const [balance, owed] = await Promise.all([treasury.balance(req.params.address as `0x${string}`), db.owedTo(req.params.address)]);
+  if (!(owed > 0.000001)) return res.json({ balance });
+  const p = flag('PAYOUTS_OFF') ? null : await db.payableAt(req.params.address, PURSE_DAILY_CAP);
+  res.json({ balance, owed: Math.round(owed * 1e6) / 1e6, ...(p?.at ? { owed_next_in: Math.max(1, Math.ceil((p.at.getTime() - Date.now()) / 1000)) } : {}) });
 });
 /**
  * one win and whether its prize has been paid. the winner's page asks this once the money shows up,
@@ -132,9 +143,30 @@ app.get('/api/win/:id', async (req, res) => {
   const w = Number.isInteger(id) && id > 0 ? await db.breachById(id) : null;
   if (!w) return res.status(404).json({ error: 'no such win' });
   const owed = w.tx_hash ? 0 : Math.max(0, Math.round((Number(w.amount) - Number(w.paid ?? 0)) * 1e6) / 1e6);
+  // every payment made towards it. a prize bigger than a daily cap is paid in parts, each a transaction of its own.
+  const parts = await db.paymentsFor(w.id);
+  const link = (tx: string) => `${net.explorer}/receipt/${tx}`;
+  const payments = parts.length ? parts.map((p) => ({ amount: Number(p.amount), tx: p.tx_hash, receipt: link(p.tx_hash), at: p.created_at }))
+    : w.tx_hash ? [{ amount: Number(w.amount), tx: w.tx_hash, receipt: link(w.tx_hash), at: (w as any).paid_at ?? null }] : [];
   res.json({ id: w.id, generation: w.gen, prize: w.amount, paid: Math.round((Number(w.amount) - owed) * 1e6) / 1e6, still_owed: owed,
-    tx: w.tx_hash, receipt: w.tx_hash ? `${net.explorer}/receipt/${w.tx_hash}` : null });
+    tx: w.tx_hash, receipt: w.tx_hash ? link(w.tx_hash) : payments[payments.length - 1]?.receipt ?? null, payments,
+    ...(owed > 0 ? await waitingFor(w.id, w.gen, w.player, Number(w.amount) - owed > 0.000001) : {}) });
 });
+/**
+ * why money that has been won has not all been sent, and when the next of it will be. a winner who
+ * is paid part of a prize and told nothing about the rest has every reason to think it was kept.
+ */
+async function waitingFor(winId: number, wonAtGen: number, player: string, partPaid: boolean) {
+  const it = partPaid ? 'the rest' : 'it';
+  if ((await db.currentGeneration()).gen <= wonAtGen) return { waiting_for: 'the lesson', note: 'a prize is sent once the ai has finished learning from the conversation that won it.' };
+  if (flag('PAYOUTS_OFF')) return { waiting_for: 'the operator', note: 'payouts are paused. what is owed stays owed, and is sent when they are switched back on.' };
+  // a payment that is being made right now is counted against the caps already. it is not "held by a cap": it is on its way.
+  if (await db.paymentPending(winId)) return { waiting_for: 'a payment in flight', next_payment_in: 10, note: 'a payment is on its way.' };
+  const p = await db.payableAt(player, PURSE_DAILY_CAP);
+  if (!p.at) return { waiting_for: 'the next sweep', next_payment_in: 60, note: `${it} is on its way.` };
+  return { waiting_for: p.held, next_payment_in: Math.max(1, Math.ceil((p.at.getTime() - Date.now()) / 1000)),
+    note: p.held === 'purse daily cap' ? `the house pays one purse at most $${PURSE_DAILY_CAP} a day. ${it} is sent by itself as that frees up.` : `the house pays out at most $${DAILY_CAP} a day across all winners. ${it} is sent by itself as that frees up.` };
+}
 /** what the ai has been paying for its own thoughts. each one is a transaction; this is just the list. */
 app.get('/api/thoughts', async (_req, res) => {
   const [recent, b] = await Promise.all([db.recentThoughts(12), db.thoughtBooks()]);

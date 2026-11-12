@@ -190,6 +190,9 @@ async function main() {
   check('nothing is left owed', b.owed === 0 && b.unpaid_wins === 0, JSON.stringify({ owed: b.owed, unpaid: b.unpaid_wins }));
   const paidWin = await api('/win/' + win.win.id);
   check('the win can be looked up, with the receipt of its payment', paidWin.status === 200 && near(paidWin.paid, pot) && paidWin.still_owed === 0 && /\/receipt\/0x[0-9a-f]{64}$/i.test(paidWin.receipt || ''), JSON.stringify(paidWin));
+  check('it lists the one payment that paid it, and has nothing to wait for', paidWin.payments?.length === 1 && near(paidWin.payments[0].amount, pot) && paidWin.payments[0].tx === paidWin.tx && paidWin.waiting_for === undefined, JSON.stringify(paidWin));
+  const purseNow = await api('/balance/' + w.address);
+  check('and the winner is owed nothing more', purseNow.owed === undefined && near(Number(purseNow.balance), before + pot), JSON.stringify(purseNow));
   const hist = await api('/history');
   const newest = hist.generations[hist.generations.length - 1];
   check('the new rules passed both suites', newest.regression_passed === 1 && newest.legit_passed === 1 && !!newest.lesson, JSON.stringify({ reg: newest.regression_passed, alive: newest.legit_passed, lesson: newest.lesson }));

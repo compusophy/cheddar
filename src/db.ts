@@ -167,6 +167,27 @@ export const settleReservation = (id: number, txHash: string) => sql`UPDATE disb
 export const paymentsInFlight = (winId: number) => sql<{ id: number; amount: number; tx_hash: string; valid_before: string | null }[]>`
   SELECT id, amount, tx_hash, valid_before FROM disbursements WHERE win_id = ${winId} AND tx_hash IS NOT NULL AND confirmed = 0 ORDER BY id ASC`;
 export const releaseReservation = (id: number) => sql`DELETE FROM disbursements WHERE id = ${id}`;
+/** a payment towards this win was set aside or sent in the last couple of minutes and has not been confirmed yet. */
+export const paymentPending = async (winId: number) =>
+  (await sql`SELECT 1 FROM disbursements WHERE win_id = ${winId} AND confirmed = 0 AND created_at > now() - interval '2 minutes' LIMIT 1`).length > 0;
+/** the payments that have landed towards one win, oldest first. a prize bigger than a daily cap has more than one. */
+export const paymentsFor = (winId: number) => sql<{ amount: number; tx_hash: string; created_at: Date }[]>`
+  SELECT amount, tx_hash, created_at FROM disbursements WHERE win_id = ${winId} AND confirmed = 1 AND tx_hash IS NOT NULL ORDER BY id ASC`;
+/**
+ * when the house can next pay this purse anything. both caps count a rolling day, so room comes back
+ * as old payments turn a day old. `at` is null when there is room now; `held` names the cap in the way.
+ */
+export async function payableAt(recipient: string, purseCap: number): Promise<{ at: Date | null; held: 'purse daily cap' | 'daily cap' | null }> {
+  const who = recipient.toLowerCase();
+  const day = await sql<{ amount: number; at: Date; recipient: string }[]>`
+    SELECT amount, created_at AS at, recipient FROM disbursements WHERE created_at > now() - interval '1 day' ORDER BY created_at, id`;
+  const house = freesAt(day, DAILY_CAP, 0.01), purse = freesAt(day.filter((d) => d.recipient === who), purseCap, 0.01);
+  if (!house && !purse) return { at: null, held: null };
+  return (purse?.getTime() ?? 0) >= (house?.getTime() ?? 0) ? { at: purse, held: 'purse daily cap' } : { at: house, held: 'daily cap' };
+}
+/** what the house still owes one purse, across all its wins. */
+export const owedTo = async (player: string) =>
+  Number((await sql<{ t: number }[]>`SELECT COALESCE(SUM(amount - paid),0)::float AS t FROM breaches WHERE lower(player) = ${player.toLowerCase()} AND tx_hash IS NULL AND amount > 0`)[0].t);
 
 // ---------- thinking money: the ai pays for its own inference, one payment per thought ----------
 

@@ -146,6 +146,8 @@ content-type: application/json
 
 each answer is \`{"reply": "...", "won": false, "turns_left": 24}\`. when \`won\` is true you are done and the prize is on its way.
 
+a prize is sent to the wallet that paid for the game, once it has learned from the conversation. the \`prize_status\` url in the winning answer says what has been paid (\`paid\`, \`payments\` with a receipt each) and what has not (\`still_owed\`, with \`waiting_for\` and \`next_payment_in\` seconds). the house pays one wallet a limited amount a day, so a very large pot arrives in parts, by itself.
+
 a 429 means the game is busy (too many messages at once, from you or from everyone). that message did not count and used none of your turns: wait \`retry_after\` seconds and send it again.
 
 if it learns from someone else while you are mid-game you get a 409: the rules changed and that game is over. the messages you had left are still yours. POST \`{"session": "<the interrupted session>"}\` to \`${f.play.url}\` and you get a new session against the new rules with that many messages, at no charge.

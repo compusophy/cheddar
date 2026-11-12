@@ -33,8 +33,20 @@ if (!purse.key || !purse.address) {
 }
 let balance = 0, state = null, session = null, word = 'cheese';
 
-async function readBalance() { try { balance = Number((await api('/balance/' + purse.address)).balance) || 0; } catch {} return balance; }
-function paintBalance(withPop) { $('#bal').textContent = money(balance); $('#cashbal').textContent = money(balance); if (withPop) pop($('#purse')); }
+/** what the house still owes this purse from a win, when a daily cap has held part of a prize back. */
+let owedToMe = null;
+async function readBalance() {
+  try { const r = await api('/balance/' + purse.address); balance = Number(r.balance) || 0; owedToMe = r.owed > 0 ? { amount: Number(r.owed), nextIn: Number(r.owed_next_in) || 0 } : null; } catch {}
+  return balance;
+}
+const owedLine = () => !owedToMe ? '' : `the house still owes you ${money(owedToMe.amount)} from a win. it pays a purse only so much a day, so the rest comes by itself${owedToMe.nextIn ? `: the next part in about ${howLong(owedToMe.nextIn)}` : ''}.`;
+function paintBalance(withPop) {
+  $('#bal').textContent = money(balance); $('#cashbal').textContent = money(balance);
+  const owed = $('#owed'); if (owed) { owed.textContent = owedLine(); owed.classList.toggle('hidden', !owedToMe); }
+  // money the house owes this purse is worth a line of its own when the status line has nothing else to say.
+  if (owedToMe && state && !$('#status').textContent) status('');
+  if (withPop) pop($('#purse'));
+}
 
 // the chain, as little of it as the page needs. gas here is paid in the same dollars being sent, and
 // the most a transfer could cost is set aside before it runs, so "all of it" is never quite all of it.
@@ -115,6 +127,8 @@ function status(text, kind) {
   if (!text && state && state.awake === false && !state.learning) { text = asleepLine(); kind = 'busy'; }
   // or the purse cannot afford a game and the house has no dollar for it yet: say that, and when.
   else if (!text && dry && !session && balance < needed()) text = dry;
+  // or the house owes this purse the rest of a prize: say so, and when the next of it comes.
+  else if (!text && owedToMe && !session) { text = `the house still owes you ${money(owedToMe.amount)} from a win.${owedToMe.nextIn ? ` the next part in about ${howLong(owedToMe.nextIn)}.` : ' it is on its way.'}`; kind = 'ok'; }
   el.textContent = text; el.className = 'status' + (kind ? ' ' + kind : '');
 }
 
@@ -365,25 +379,52 @@ async function saveName(name, btn) {
     ls.set('nick', r.nickname || ''); if (btn) btn.textContent = r.nickname ? 'yours' : 'saved'; $('#cashnick') && ($('#cashnick').value = r.nickname || '');
   } catch (e) { if (btn) { btn.disabled = false; btn.textContent = 'claim it'; } status(e.message, 'bad'); }
 }
-/** after a win: watch the purse until the pot lands, then make it count up. */
+/**
+ * after a win: watch for the prize to land, and say what happened to it. all of it arrives, or part
+ * of it does and the rest is owed, or a daily cap holds the whole of it for now. each of those is
+ * said under the win, with the receipt of whatever was sent. a winner is never left to wonder.
+ *
+ * the money is on the chain a moment before the game has written down that it sent it. nothing is
+ * said about what is "still owed" from a record that has not caught up with the purse: this waits
+ * until the game's account of what it paid covers what actually arrived.
+ */
+const HELD = /^(purse daily cap|daily cap|the operator)$/; // the reasons a prize waits that are not "it is on its way"
 async function watchPayout(before, winId) {
+  const card = document.querySelector('#thread .win:last-of-type') || thread();
+  const sayOwed = (w) => {
+    const d = document.createElement('div');
+    d.className = 'owed';
+    d.textContent = `${money(w.still_owed)} ${w.paid > 0 ? 'more ' : ''}is yours. ${w.note || 'it is sent by itself.'}${w.next_payment_in > 90 ? ` the next part in about ${howLong(w.next_payment_in)}.` : ''}`;
+    card.appendChild(d); scrollDown();
+  };
   for (let i = 0; i < 40; i++) {
     await sleep(6000); await readBalance();
     if (balance > before) {
+      const got = balance - before;
       tween($('#bal'), before, balance, 1000); pop($('#purse')); $('#cashbal').textContent = money(balance); status('paid.', 'ok');
       try { chime(); } catch { /* a sound the browser would not play is no reason to stop here */ }
+      let w = null;
+      for (let k = 0; k < 8 && !w; k++) {
+        try { const seen = await api('/win/' + winId); if (seen.paid >= got - 0.000001) w = seen; } catch { /* ask again */ }
+        if (!w) await sleep(2000);
+      }
+      if (!w) return; // the money arrived. the rest is a nicety, and is not guessed at.
       // the prize is a payment like any other: link its receipt under the win.
-      try {
-        const w = await api('/win/' + winId);
-        if (w.receipt && /^https:\/\//.test(w.receipt)) {
-          const a = document.createElement('a');
-          a.className = 'receipt paid'; a.href = w.receipt; a.target = '_blank'; a.rel = 'noopener noreferrer';
-          a.textContent = `${money(w.paid)} paid to you`;
-          (document.querySelector('#thread .win:last-of-type') || thread()).appendChild(a);
-        }
-      } catch { /* the money arrived; the link is a nicety */ }
+      if (w.receipt && /^https:\/\//.test(w.receipt)) {
+        const a = document.createElement('a');
+        a.className = 'receipt paid'; a.href = w.receipt; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.textContent = `${money(w.paid)} paid to you`;
+        card.appendChild(a); scrollDown();
+      }
+      // a prize bigger than the house pays in a day comes in parts. the rest is said, not left to be wondered about.
+      if (w.still_owed > 0 && HELD.test(w.waiting_for || '')) { sayOwed(w); status('paid in part. the rest follows.', 'ok'); }
       return;
     }
+    // it has learned, and still nothing has been sent: a daily cap, or the operator, is holding all of it.
+    try {
+      const w = await api('/win/' + winId);
+      if (w.still_owed > 0 && HELD.test(w.waiting_for || '')) { sayOwed(w); status('yours, and held for now. it will be sent.', 'ok'); return; }
+    } catch { /* ask again next time round */ }
   }
 }
 
