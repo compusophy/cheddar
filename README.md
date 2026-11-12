@@ -75,6 +75,8 @@ when it says the word, that transcript goes to a patcher that writes new rules. 
 
 a lesson has a time limit (`LESSON_SECONDS`, default 200), because it runs inside a function that is killed at 300: one that outlived it would be cut off halfway, hold the lock, and start again from nothing, paying for every replay twice. so a lesson knows its deadline and ends inside it. a conversation it did not get to replay to the end is recorded as not checked, never as held, and a generation that was not tested against the very conversation that beat it is marked leaky. a lesson that has failed to finish twice is cut down to one rewrite tested against that one conversation.
 
+the rewrite itself is one long answer from a model that may also reason, and reasoning is spent from the same budget as the answer. so it is given room (`PATCH_TOKENS`, 4096) and asked to reason little, and a rewrite that comes back cut off, empty or a single line is never adopted: the old rules with the losing conversation attached go to the suites in its place. the patcher is also told to keep the rules under about `RULES_WORDS` (800) words, merging what overlaps, because the rules are read before every single reply and their length is a cost on every message.
+
 fail either and the patcher retries with the failures as context. a win whose first patch fails the alive suite is flagged **autoimmune**: the winning transcript made the patcher damage its own host.
 
 the only code between the model and the money is a daily prize cap. everything else is whatever it has learned.

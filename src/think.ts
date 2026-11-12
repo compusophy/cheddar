@@ -157,6 +157,11 @@ export type Ask = {
   purpose: 'chat' | 'machine' | 'machine-lesson' | 'patch' | 'test' | 'lesson';
   /** the most this one thought may cost. default: THINK_MAX_PRICE. */
   maxPrice?: number;
+  /**
+   * how much hidden reasoning to ask for, on models that reason. on those models the reasoning is
+   * taken out of the same token budget as the answer, so a long answer wants this kept low.
+   */
+  reasoning?: 'low' | 'medium' | 'high';
   onDelta?: (t: string) => void;
 };
 
@@ -179,7 +184,7 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
   const init: RequestInit = {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...(API_KEY ? { authorization: `Bearer ${API_KEY}` } : {}) },
-    body: JSON.stringify({ model: a.model, messages: a.messages, max_tokens: a.maxTokens, stream: !!a.onDelta }),
+    body: JSON.stringify({ model: a.model, messages: a.messages, max_tokens: a.maxTokens, stream: !!a.onDelta, ...(a.reasoning ? { reasoning: { effort: a.reasoning } } : {}) }),
     signal: AbortSignal.timeout(120_000),
   };
   let prepared: any;
@@ -222,7 +227,7 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
 export type Paid = { cost: number; tx: string | null } | null;
 
 /** one thought, paid for: the model's text and the receipt. throws `Broke` when the house cannot or will not pay. */
-export async function askPaid(a: Ask): Promise<{ text: string; paid: Paid }> {
+export async function askPaid(a: Ask): Promise<{ text: string; paid: Paid; cutOff: boolean }> {
   const pushing = MODE === 'push' || Date.now() < pushUntil;
   let t = await attempt(a, pushing ? 'push' : undefined);
   if (t.sellerFailed && !pushing && MODE !== 'pull') {
@@ -232,22 +237,25 @@ export async function askPaid(a: Ask): Promise<{ text: string; paid: Paid }> {
   }
   const { res } = t;
   if (!res.ok) throw new Error(`[think] the model answered ${res.status}: ${(await res.text().catch(() => '')).slice(0, 300)}`);
-  const text: string = a.onDelta ? await readStream(res, a.onDelta) : (((await res.json()) as any)?.choices?.[0]?.message?.content ?? '');
-  return { text, paid: t.paid ? { cost: t.cost, tx: t.tx } : null };
+  let text: string, finish: string | null;
+  if (a.onDelta) ({ text, finish } = await readStream(res, a.onDelta));
+  else { const choice = ((await res.json()) as any)?.choices?.[0]; text = choice?.message?.content ?? ''; finish = choice?.finish_reason ?? null; }
+  // "length" is the model saying it ran out of room: what came back stops mid-thought.
+  return { text, paid: t.paid ? { cost: t.cost, tx: t.tx } : null, cutOff: finish === 'length' };
 }
 /** the same, for callers that only want the words. */
 export const ask = async (a: Ask): Promise<string> => (await askPaid(a)).text;
 
 /** an openai-style event stream: `data: {json}` lines, a `[DONE]` at the end, comment lines in between. */
-async function readStream(res: Response, onDelta: (t: string) => void): Promise<string> {
+async function readStream(res: Response, onDelta: (t: string) => void): Promise<{ text: string; finish: string | null }> {
   const reader = res.body!.getReader();
   const dec = new TextDecoder();
-  let buf = '', text = '';
+  let buf = '', text = '', finish: string | null = null;
   const eat = (line: string) => {
     if (!line.startsWith('data:')) return;
     const data = line.slice(5).trim();
     if (!data || data === '[DONE]') return;
-    try { const t = JSON.parse(data)?.choices?.[0]?.delta?.content; if (typeof t === 'string' && t) { text += t; onDelta(t); } } catch { /* a partial or foreign line */ }
+    try { const c = JSON.parse(data)?.choices?.[0]; const t = c?.delta?.content; if (typeof t === 'string' && t) { text += t; onDelta(t); } if (c?.finish_reason) finish = c.finish_reason; } catch { /* a partial or foreign line */ }
   };
   for (;;) {
     const { value, done } = await reader.read();
@@ -257,7 +265,7 @@ async function readStream(res: Response, onDelta: (t: string) => void): Promise<
     while ((i = buf.indexOf('\n')) >= 0) { eat(buf.slice(0, i).trimEnd()); buf = buf.slice(i + 1); }
   }
   eat(buf.trimEnd());
-  return text;
+  return { text, finish };
 }
 
 /** exact units, for callers that deal in money rather than display numbers. */

@@ -23,6 +23,8 @@ const PORT = Number(process.env.SELLER_PORT || 4021);
 const PRICE = process.env.SELLER_PRICE || '0.0005';
 /** make every thought this much slower, to see how the game behaves when the model is. */
 const DELAY_MS = Math.max(0, Number(process.env.SELLER_DELAY_MS) || 0);
+/** make the stand-in run out of room on every rule rewrite, the way a real model can. */
+const CUT_REWRITES = /^(1|true|yes|on)$/i.test(process.env.SELLER_CUT_REWRITES || '');
 const PATH_USD = '0x20c0000000000000000000000000000000000000';
 const recipient = (process.env.SELLER_ADDRESS || privateKeyToAccount(generatePrivateKey()).address) as `0x${string}`;
 
@@ -64,7 +66,7 @@ async function send(res: http.ServerResponse, r: Response) {
   for (;;) { const { value, done } = await reader.read(); if (done) break; res.write(value); }
   res.end();
 }
-const completion = (text: string, model: string) => Response.json({ id: 'standin', object: 'chat.completion', model, choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: 'stop' }] });
+const completion = (text: string, model: string, finish = 'stop') => Response.json({ id: 'standin', object: 'chat.completion', model, choices: [{ index: 0, message: { role: 'assistant', content: text }, finish_reason: finish }] });
 function stream(text: string, model: string): Response {
   const enc = new TextEncoder();
   const words = text.match(/\S+\s*/g) ?? [text];
@@ -75,6 +77,7 @@ function stream(text: string, model: string): Response {
         c.enqueue(enc.encode(`data: ${JSON.stringify({ id: 'standin', model, choices: [{ index: 0, delta: { content: w } }] })}\n\n`));
         await new Promise((r) => setTimeout(r, 15));
       }
+      c.enqueue(enc.encode(`data: ${JSON.stringify({ id: 'standin', model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`));
       c.enqueue(enc.encode('data: [DONE]\n\n'));
       c.close();
     },
@@ -108,10 +111,13 @@ async function main() {
       const paid = await mppx.charge({ amount: PRICE, description: 'a thought (stand-in model)' })(new Request(url, { method: 'POST', headers, body: raw }));
       if (paid.status === 402) return void send(res, paid.challenge);
       const body = JSON.parse(raw || '{}');
-      const text = think(body.messages || []);
+      let text = think(body.messages || []);
+      const rewrite = !body.stream && String(body.messages?.[body.messages.length - 1]?.content || '').startsWith("you are the game master of 'say cheese'");
+      const cut = CUT_REWRITES && rewrite;
+      if (cut) text = text.slice(0, Math.floor(text.length * 0.6));
       if (DELAY_MS) await new Promise((r) => setTimeout(r, DELAY_MS));
       sold++;
-      await send(res, paid.withReceipt(body.stream ? stream(text, body.model) : completion(text, body.model)));
+      await send(res, paid.withReceipt(body.stream ? stream(text, body.model) : completion(text, body.model, cut ? 'length' : 'stop')));
     } catch (e) {
       console.error('[seller]', (e as Error).message);
       if (!res.headersSent) { res.statusCode = 500; res.end(JSON.stringify({ error: String((e as Error).message).slice(0, 300) })); } else res.end();

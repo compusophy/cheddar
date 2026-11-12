@@ -40,5 +40,10 @@ export async function stepStream(policy: string, history: Turn[], userMessage: s
 /** a single prompt, a single answer. the patcher, the lesson and the machine's next move all use this. */
 export const say = (model: string, prompt: string, maxTokens: number, purpose: 'patch' | 'lesson' | 'machine' | 'machine-lesson', big = false) =>
   ask({ model, messages: [{ role: 'user', content: prompt }], maxTokens, purpose, ...(big ? { maxPrice: PATCH_MAX_PRICE } : {}) });
+/** a single prompt whose answer is a document: little hidden reasoning, and the caller is told if it was cut off. */
+export const write = (model: string, prompt: string, maxTokens: number, purpose: 'patch' | 'lesson' | 'machine-lesson', big = false) =>
+  askPaid({ model, messages: [{ role: 'user', content: prompt }], maxTokens, purpose, reasoning: 'low', ...(big ? { maxPrice: PATCH_MAX_PRICE } : {}) });
+/** how much room the rule rewrite gets. the rules run to a thousand tokens and more, and a reasoning model spends from the same budget. */
+export const PATCH_TOKENS = Math.max(1024, Number(env('PATCH_TOKENS')) || 4096);
 
 export const renderTranscript = (t: Turn[]) => t.map((x) => `${x.role === 'user' ? 'USER' : 'AI'}: ${x.text}`).join('\n');
