@@ -15,7 +15,7 @@ import { step, stepStream, MAX_TURNS, MAX_MESSAGE_CHARS, type Turn } from './age
 import { harden, summarise } from './immune';
 import { STAKE, JACKPOT_SHARE, PURSE_DAILY_CAP, RATE, about, saidIt } from './game';
 import * as treasury from './treasury';
-import { flag } from './net';
+import { flag, num } from './net';
 import { awake, Broke } from './think';
 
 export type ChatResult = { status: number; body: any };
@@ -25,6 +25,11 @@ const cleanNick = (n: unknown) => {
   return s && !s.includes('🤖') && !/machine/i.test(s) ? s : null;
 };
 const LOCK = 'harden';
+/**
+ * how long a lesson may take. the function it runs in is killed at 300 seconds, and the lesson is
+ * followed by a sentence about what was learned and by the payout, so it stops well short of that.
+ */
+const LESSON_MS = Math.max(20, num('LESSON_SECONDS', 200)) * 1000;
 const FREE_PLAYERS = new Set([(process.env.REDTEAM_ADDRESS || '').toLowerCase()]);
 
 /** open a session. `stakeTx` is the hash of the purse's transfer to the house; verified before anything else. */
@@ -154,13 +159,19 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
 export async function runHardening(failed: db.Generation, winId: number, prize: number): Promise<void> {
   if (!(await db.acquireLock(LOCK, String(winId)))) return;
   const report = (phase: string) => db.setLockPhase(LOCK, phase);
+  const deadline = Date.now() + LESSON_MS;
   try {
     await report('reading');
     const win = (await db.breachById(winId))!;
+    // a lesson that has been started twice already and never finished gets the short version:
+    // one rewrite, tested against the conversation that beat it. the game moves on either way.
+    const attempts = await db.lessonStarted(winId);
+    const minimal = attempts > 2;
+    if (minimal) console.warn(`[immune] win #${winId}: lesson attempt ${attempts}, taking the short version`);
     console.log(`[immune] gen ${failed.gen} beaten (#${winId}); learning...`);
     // the machine's wins are learned from on the machine's allowance, never on the players' thinking money.
     const budget = FREE_PLAYERS.has(win.player) ? 'machine' as const : 'house' as const;
-    const out = await harden(failed.policy, win, await db.allBreaches(), report, budget);
+    const out = await harden(failed.policy, win, await db.allBreaches(), report, budget, { deadline, minimal });
     const nextGen = failed.gen + 1;
     for (const round of out.log) for (const r of round.results) await db.recordRegression(nextGen, round.round, r.breachId, r.kind, r.passed, `${r.name}: ${r.detail}`);
     if (out.autoimmune) await db.markAutoimmune(winId);
@@ -170,7 +181,7 @@ export async function runHardening(failed: db.Generation, winId: number, prize: 
     console.log(`[immune] gen ${nextGen} live after ${out.rounds} round(s). regression=${out.regressionPassed} alive=${out.legitPassed} autoimmune=${out.autoimmune}`);
     if (prize > 0) { await report('paying out'); await payout((await db.breachById(winId))!); }
   } catch (e) {
-    if (e instanceof Broke) console.warn(`[immune] learning from win #${winId} paused: ${e.message}`);
+    if (e instanceof Broke) { console.warn(`[immune] learning from win #${winId} paused: ${e.message}`); await db.lessonPaused(winId).catch(() => {}); }
     else console.error('[immune] hardening failed', e);
   } finally {
     await db.releaseLock(LOCK);

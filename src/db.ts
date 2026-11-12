@@ -44,6 +44,8 @@ export function init(): Promise<void> {
     // how much of a win has left the house so far. a prize bigger than a daily cap is paid in parts.
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS paid DOUBLE PRECISION NOT NULL DEFAULT 0`;
     await sql`ALTER TABLE generations ADD COLUMN IF NOT EXISTS lesson TEXT`;
+    // how many times a lesson has been started for this win. one that keeps failing to finish is cut down.
+    await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0`;
     // every thought the ai paid for: what it was for, which model, what it cost, and the payment that bought it.
     await sql`CREATE TABLE IF NOT EXISTS thoughts (
       id SERIAL PRIMARY KEY, purpose TEXT NOT NULL, model TEXT NOT NULL, amount DOUBLE PRECISION NOT NULL,
@@ -197,6 +199,10 @@ export async function recordBreach(b: Omit<Breach, 'id' | 'created_at' | 'autoim
     VALUES (${b.gen}, ${b.session_id}, ${b.player}, ${b.nickname}, ${b.recipient}, ${b.amount}, ${b.tx_hash}, ${b.transcript}) RETURNING id`;
   return r.id;
 }
+/** a lesson is starting for this win. returns how many times one has now been started. */
+export const lessonStarted = async (id: number) => Number((await sql<{ attempts: number }[]>`UPDATE breaches SET attempts = attempts + 1 WHERE id = ${id} RETURNING attempts`)[0]?.attempts ?? 1);
+/** it stopped for want of money, not for want of time: that start does not count against it. */
+export const lessonPaused = (id: number) => sql`UPDATE breaches SET attempts = GREATEST(attempts - 1, 0) WHERE id = ${id}`;
 export const markAutoimmune = (id: number) => sql`UPDATE breaches SET autoimmune = 1 WHERE id = ${id}`;
 export const allBreaches = () => sql<Breach[]>`SELECT * FROM breaches ORDER BY id ASC`;
 export const breachesForGen = (gen: number) => sql<Breach[]>`SELECT * FROM breaches WHERE gen = ${gen} ORDER BY id ASC`;

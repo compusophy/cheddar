@@ -4,7 +4,7 @@ dotenv.config({ path: '.env.local' });
 dotenv.config();
 import * as db from '../src/db';
 import { DAILY_CAP, JACKPOT_SEED, saidIt } from '../src/game';
-import { suiteFor, REGRESSION_MAX } from '../src/immune';
+import { suiteFor, pooled, REGRESSION_MAX } from '../src/immune';
 
 let passed = 0; const failures: string[] = [];
 const check = (name: string, cond: boolean, detail = '') => {
@@ -117,6 +117,21 @@ async function main() {
   check('for each generation it is the first conversation that beat it', suite.some((w) => w.id === 4) && suite.some((w) => w.id === 1));
   const long = Array.from({ length: 200 }, (_, i) => mk(i + 1, i));
   check('and the whole suite has a ceiling', suiteFor(long[199], long).length === REGRESSION_MAX, String(suiteFor(long[199], long).length));
+
+  console.log('a lesson starts nothing new once its time is up');
+  const nap = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const started: number[] = [];
+  const done = await pooled([1, 2, 3, 4, 5, 6], 2, async (n) => { started.push(n); await nap(60); return n * 10; }, Date.now() + 90);
+  check('work already running is finished', done[0] === 10 && done[1] === 20, JSON.stringify(done));
+  check('work that had not started is left alone', done[4] === undefined && done[5] === undefined && !started.includes(6), JSON.stringify({ done, started }));
+  const all = await pooled([1, 2, 3], 2, async (n) => n + 1);
+  check('with no deadline everything runs, in order', JSON.stringify(all) === '[2,3,4]', JSON.stringify(all));
+  const lessonWin = await db.recordBreach({ gen: 0, session_id: 'attempts-test', player: '0x00000000000000000000000000000000000000d1', nickname: null, recipient: '0x00000000000000000000000000000000000000d1', amount: 0, tx_hash: null, transcript: '[]' });
+  check('the first start of a lesson is counted as one', (await db.lessonStarted(lessonWin)) === 1);
+  check('the next as two', (await db.lessonStarted(lessonWin)) === 2);
+  await db.lessonPaused(lessonWin);
+  check('a start that stopped for want of money is not counted', (await db.lessonStarted(lessonWin)) === 2);
+  await db.sql`DELETE FROM breaches WHERE id = ${lessonWin}`;
 
   console.log(`\n${passed} passed, ${failures.length} failed`);
   await db.sql.end();

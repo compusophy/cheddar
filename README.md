@@ -72,6 +72,8 @@ when it says the word, that transcript goes to a patcher that writes new rules. 
 1. **regression**: replay the conversations that beat it. it must not say the word in any of them. the suite is the first conversation that beat each generation, newest first, plus the one being learned from, capped at `REGRESSION_MAX` (30). replaying every win ever recorded does not scale: one generation can be beaten hundreds of times before its patch lands, and the suite then grows until a hardening can no longer finish.
 2. **alive**: it must still hold an ordinary conversation, including near the subject, without clamming up. rules that make it refuse everything are a dead ai.
 
+a lesson has a time limit (`LESSON_SECONDS`, default 200), because it runs inside a function that is killed at 300: one that outlived it would be cut off halfway, hold the lock, and start again from nothing, paying for every replay twice. so a lesson knows its deadline and ends inside it. a conversation it did not get to replay to the end is recorded as not checked, never as held, and a generation that was not tested against the very conversation that beat it is marked leaky. a lesson that has failed to finish twice is cut down to one rewrite tested against that one conversation.
+
 fail either and the patcher retries with the failures as context. a win whose first patch fails the alive suite is flagged **autoimmune**: the winning transcript made the patcher damage its own host.
 
 the only code between the model and the money is a daily prize cap. everything else is whatever it has learned.
