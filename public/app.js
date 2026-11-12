@@ -88,6 +88,21 @@ document.querySelectorAll('.tab').forEach((b) => b.addEventListener('click', () 
 }));
 
 let lastGen = null, wasLearning = false, poll = null;
+/**
+ * a paid game that the ai's learning cut short leaves its unused messages waiting. `carry` is how
+ * many, when there are some: the next game is then the rest of that one, and it is not charged.
+ */
+let carry = null;
+function paintAgain() {
+  const learning = !!state?.learning;
+  // play again waits for the new rules to land
+  $('#again').disabled = learning;
+  $('#again').textContent = learning ? 'it is learning…' : carry ? `carry on · ${carry.turnsLeft} left, no charge` : `play again · ${money(state.stake)}`;
+}
+async function checkCarry() {
+  try { const r = await peek(); carry = r.session ? null : (r.carry || null); } catch { /* ask again later */ }
+  paintAgain();
+}
 async function loadState() {
   state = await api('/state');
   word = state.word;
@@ -96,16 +111,15 @@ async function loadState() {
   $('#msg').maxLength = state.max_chars;
   $('#gen').classList.toggle('learning', !!learning);
   if (!session) $('#jackpot').textContent = money(state.jackpot);
-  // play again waits for the new rules to land
-  $('#again').disabled = !!learning;
-  $('#again').textContent = learning ? 'it is learning…' : `play again · ${money(state.stake)}`;
+  paintAgain();
   // whoever is mid-conversation is told the moment it starts, not when they next speak.
   $('#send').disabled = !!learning || sending;
   $('#msg').disabled = !!learning;
   if (learning) status(`it is learning · ${learning.phase}`, 'busy');
   else if (lastGen !== null && lastGen !== state.gen) {
     status(`it learned something. generation ${state.gen}.`, 'ok');
-    if (session) { note('it learned something mid-conversation. that game is over.'); end(); }
+    if (session) { note('it learned something mid-conversation. that game is over, but the messages you had left carry over.'); end(); }
+    else checkCarry();
   } else if (wasLearning) status('');
   // asleep: the house cannot pay for a reply right now. said up front, before anyone stakes.
   if (!learning && state.awake === false && !sending && !$('#status').textContent) status('');
@@ -171,7 +185,7 @@ async function openFor(hash) {
 }
 const showAbandon = () => { $('#abandon').classList.toggle('hidden', !session); disarm(); };
 function adopt(r) {
-  session = { id: r.session, gen: r.gen, turnsLeft: r.resumed ? r.turnsLeft : state.max_turns };
+  session = { id: r.session, gen: r.gen, turnsLeft: r.turnsLeft ?? state.max_turns };
   $('#intro')?.remove();
   if (r.resumed) {
     for (const t of r.transcript) t.role === 'user' ? bubble('me', esc(t.text)) : bubble('it', highlight(t.text));
@@ -184,7 +198,12 @@ async function ensureSession() {
   if (session) return;
   let r = await peek();
   if (r.session) ls.del('pending'); // one game per purse: an open game is where the last stake went
-  else {
+  else if (r.carry && !ls.get('pending')) {
+    // the rest of a game that was interrupted: opened without a stake.
+    r = await openSession(undefined);
+    carry = null; paintAgain();
+    if (r.carried) note(`this is the rest of the game it interrupted: ${r.turnsLeft} messages, no charge.`);
+  } else {
     let hash = ls.get('pending');
     if (hash) status('picking your stake back up…', 'busy');
     else {
@@ -212,6 +231,7 @@ async function resumeIfOpen() {
     const r = await peek();
     if (r.session) { ls.del('pending'); adopt(r); }
     else if (ls.get('pending')) status('a game you paid for is waiting. say something.', 'ok');
+    else if (r.carry) { carry = r.carry; paintAgain(); status(`you have ${r.carry.turnsLeft} messages left from a game it interrupted. no charge.`, 'ok'); }
   } catch {}
 }
 
@@ -325,7 +345,7 @@ $('#form').addEventListener('submit', async (e) => {
 });
 $('#msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('#form').requestSubmit(); } });
 $('#msg').addEventListener('input', (e) => { e.target.style.height = ''; e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px'; });
-function end() { $('#form').classList.add('hidden'); $('#again').classList.remove('hidden'); session = null; showAbandon(); loadState(); }
+function end() { $('#form').classList.add('hidden'); $('#again').classList.remove('hidden'); session = null; showAbandon(); loadState().then(checkCarry); }
 
 /** start over: two presses, because it forfeits the rest of a paid game. */
 let armed = null;

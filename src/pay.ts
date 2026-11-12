@@ -20,7 +20,7 @@ import * as treasury from './treasury';
 import * as think from './think';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 import { WORD, STAKE, JACKPOT_SHARE } from './game';
-import { openPaidSession, runChat } from './chat';
+import { openPaidSession, runChat, carryOn } from './chat';
 import { net, flag } from './net';
 
 const chain = net.real ? tempoMainnet : tempoModerato;
@@ -119,7 +119,7 @@ content-type: application/json
 the first response is \`402 Payment Required\` with a tempo charge for $${f.stake}. pay it and repeat the request; any mpp client does both steps for you:
 
 \`\`\`
-${testnet ? `npx mppx ${f.play.url} -X POST --network testnet` : `tempo request -X POST --json '{}' ${f.play.url}`}
+${testnet ? `npx mppx ${f.play.url} -J '{"nickname": "your name"}' --network testnet` : `tempo request -X POST --json '{"nickname": "your name"}' ${f.play.url}`}
 \`\`\`
 
 you get back a \`session\`. nothing is charged if the game is closed, asleep or busy learning: those answer 503 before any payment is asked for.
@@ -133,7 +133,9 @@ content-type: application/json
 {"session": "<session>", "message": "hello"}
 \`\`\`
 
-each answer is \`{"reply": "...", "won": false, "turns_left": 24}\`. when \`won\` is true you are done and the prize is on its way. if it learns from someone else mid-game you get a 409: that game is over, buy another.
+each answer is \`{"reply": "...", "won": false, "turns_left": 24}\`. when \`won\` is true you are done and the prize is on its way.
+
+if it learns from someone else while you are mid-game you get a 409: the rules changed and that game is over. the messages you had left are still yours. POST \`{"session": "<the interrupted session>"}\` to \`${f.play.url}\` and you get a new session against the new rules with that many messages, at no charge.
 
 ## the fine print
 
@@ -180,10 +182,18 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       const claimed = req.body?.address;
       if (claimed !== undefined && claimed !== null && claimed !== '' && !isAddress(String(claimed))) return res.status(400).json({ error: 'address: a tempo address, or leave it out and the wallet that pays is used' });
       // everything that could refuse the game is checked before any money is asked for.
-      if (flag('CLOSED')) return res.status(503).json({ error: 'closed for now. nothing was charged.' });
       const up = await think.awake();
       if (!up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true });
       if (await db.lockSince('harden')) return res.status(503).json({ error: 'it is learning from a win. nothing was charged. try again in a minute.', retry_after: 30 });
+      // a game the ai's learning cut short: its session id buys back the messages that were left. no charge.
+      const prior = req.body?.session;
+      if (prior !== undefined && prior !== null && prior !== '') {
+        const c = await carryOn(String(prior));
+        if (!c) return res.status(409).json({ error: 'that game has nothing to carry over. leave "session" out to buy a new one.' });
+        return res.json({ ok: true, carried: true, session: c.session, generation: c.gen, pot: c.jackpot, turns_left: c.turnsLeft, playing_as: c.player,
+          note: 'this is the rest of the game that was interrupted. nothing was charged.' });
+      }
+      if (flag('CLOSED')) return res.status(503).json({ error: 'closed for now. nothing was charged.' });
       const { mppx, Receipt } = await load();
       const gen = await db.currentGeneration();
       const request = toRequest(req);
@@ -220,7 +230,11 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       const { session, message } = req.body || {};
       const r = await runChat(String(session), message);
       keep(r.hardening);
-      if (r.status !== 200) return res.status(r.status).json(r.body);
+      if (r.status !== 200) {
+        // interrupted by someone else's win: say exactly how to get the rest of the game back.
+        if (r.body?.carry) return res.status(r.status).json({ error: r.body.error, carry: { turns_left: r.body.carry.turnsLeft, how: { method: 'POST', url: `${origin(req)}/api/agent/play`, body: { session: String(session) } } } });
+        return res.status(r.status).json(r.body);
+      }
       const won = !!r.body.win;
       res.json({
         reply: r.body.turns?.[1]?.text ?? '', won, turns_left: r.body.turnsLeft,

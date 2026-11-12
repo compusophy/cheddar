@@ -45,6 +45,12 @@ export async function openSession(player: string, nickname: string | null, stake
     await db.updateSession(open.id, JSON.parse(open.transcript), open.turns, 'stale');
   }
   const id = randomBytes(12).toString('hex');
+  // no new stake, but a paid game of theirs was cut short by the ai learning from someone else:
+  // the messages they had left are theirs, against the new rules, at no charge.
+  if (!free && !stakeTx && (await awake()).ok) {
+    const carried = await db.takeCarry({ player }, MAX_TURNS, id, gen.gen, cleanNick(nickname));
+    if (carried) return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot(), carried: true, turnsLeft: MAX_TURNS - carried.turns } };
+  }
   if (!free) {
     // closed: no new games. said before any stake is asked for, and the page checks the same switch
     // before it sends one. a stake that is already on chain is still honoured below: the money moved.
@@ -79,12 +85,32 @@ export async function openPaidSession(player: string, nickname: string | null, s
   return { status: 200, body: { session: id, gen: gen.gen, jackpot: await db.jackpot() } };
 }
 
+/**
+ * the rest of an interrupted game, for a player who holds its session id (an agent has no purse to
+ * sign with; the id of the game it paid for is its proof). returns null when there is nothing to carry.
+ */
+export async function carryOn(sessionId: string) {
+  const old = await db.getSession(String(sessionId));
+  if (!old) return null;
+  const gen = await db.currentGeneration();
+  // a game left open against rules that have since changed is over; say so before looking for what is left of it.
+  if (old.status === 'open' && old.gen !== gen.gen) await db.updateSession(old.id, JSON.parse(old.transcript), old.turns, 'stale');
+  const id = randomBytes(12).toString('hex');
+  const carried = await db.takeCarry({ sessionId: old.id }, MAX_TURNS, id, gen.gen, null);
+  return carried ? { session: id, gen: gen.gen, jackpot: await db.jackpot(), turnsLeft: MAX_TURNS - carried.turns, player: carried.player } : null;
+}
+
 /** is this purse already in a game? a plain read, so the client never has to provoke an error to ask. */
 export async function peek(player: string) {
   if (!player || !isAddress(player)) return { status: 400, body: { error: 'no purse' } };
   const gen = await db.currentGeneration();
   const open = await db.openSessionFor(player);
-  if (!open || open.gen !== gen.gen) return { status: 200, body: { session: null, gen: gen.gen } };
+  if (!open || open.gen !== gen.gen) {
+    // a game still marked open against old rules is over. what is left of it, if it was paid for, is waiting.
+    if (open) await db.updateSession(open.id, JSON.parse(open.transcript), open.turns, 'stale');
+    const waiting = await db.carryFor(player, MAX_TURNS);
+    return { status: 200, body: { session: null, gen: gen.gen, carry: waiting ? { turnsLeft: MAX_TURNS - waiting.turns } : null } };
+  }
   return { status: 200, body: { session: open.id, gen: open.gen, resumed: true, turnsLeft: MAX_TURNS - open.turns, transcript: JSON.parse(open.transcript) } };
 }
 
@@ -116,7 +142,13 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
   // the lesson is picked back up here, and the caller is told to come back.
   if (await db.unfinishedWin()) return { status: 503, body: { error: 'it lost a moment ago and is about to learn from it. try again in a minute.' }, hardening: resumeHardening() };
   const gen = await db.currentGeneration();
-  if (s.gen !== gen.gen) { await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'stale'); return { status: 409, body: { error: 'it learned something while you were talking. go again.' } }; }
+  if (s.gen !== gen.gen) {
+    await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'stale');
+    const carry = !FREE_PLAYERS.has(s.player) && s.turns < MAX_TURNS && (await db.sessionPaid(s.id));
+    return { status: 409, body: carry
+      ? { error: 'it learned something while you were talking. the messages you had left carry over: go again, no charge.', carry: { turnsLeft: MAX_TURNS - s.turns } }
+      : { error: 'it learned something while you were talking. go again.' } };
+  }
   if (s.turns >= MAX_TURNS) { await db.updateSession(s.id, JSON.parse(s.transcript), s.turns, 'exhausted'); return { status: 409, body: { error: 'this conversation has run its course' } }; }
 
   // rate limits: the only thing standing between one player and everyone else's inference budget.

@@ -152,9 +152,43 @@ export const recordStake = (sessionId: string, player: string, amount: number, t
 export async function claimJackpot(): Promise<number> {
   return sql.begin(async (tx) => {
     const [r] = await tx<{ amount: number }[]>`UPDATE jackpot SET amount = ${JACKPOT_SEED} WHERE id = 1 RETURNING (SELECT amount FROM jackpot WHERE id = 1) AS amount`;
-    return Number(r.amount);
+    // to the millionth of a dollar, which is the smallest amount the token can move.
+    return Math.round(Number(r.amount) * 1e6) / 1e6;
   }) as any;
 }
+// ---------- carried-over games ----------
+// a paid game can be ended by someone else: another player wins, the ai learns, and every game open
+// against the old rules is over. the player paid for a number of messages and did not get them, so
+// the ones left over are handed back as a new game against the new rules, at no charge. it is given
+// once per interrupted game, only for a game that was paid for, and only for the part not yet used.
+
+const CARRY_WHERE = (maxTurns: number) => sql`s.status = 'stale' AND s.turns < ${maxTurns} AND s.updated_at > now() - interval '1 day'
+  AND EXISTS (SELECT 1 FROM stakes k WHERE k.session_id = s.id)`;
+/** is there an interrupted paid game waiting for this player? a read; nothing changes. */
+export const carryFor = async (player: string, maxTurns: number) =>
+  (await sql<{ id: string; turns: number }[]>`SELECT s.id, s.turns FROM sessions s WHERE s.player = ${player.toLowerCase()} AND ${CARRY_WHERE(maxTurns)} ORDER BY s.updated_at DESC LIMIT 1`)[0] ?? null;
+/**
+ * take the carry-over, once. the interrupted game is marked as carried and a new one is opened with
+ * the same number of messages already counted as used. one statement decides who gets it, so two
+ * requests at the same moment cannot both.
+ */
+export async function takeCarry(by: { player: string } | { sessionId: string }, maxTurns: number, newId: string, gen: number, nickname: string | null): Promise<{ from: string; turns: number; player: string } | null> {
+  return sql.begin(async (tx) => {
+    const pick = 'player' in by
+      ? tx`SELECT s.id FROM sessions s WHERE s.player = ${by.player.toLowerCase()} AND ${CARRY_WHERE(maxTurns)} ORDER BY s.updated_at DESC LIMIT 1`
+      : tx`SELECT s.id FROM sessions s WHERE s.id = ${by.sessionId} AND ${CARRY_WHERE(maxTurns)}`;
+    const [old] = await tx<{ id: string; turns: number; player: string; nickname: string | null }[]>`
+      UPDATE sessions SET status = 'carried', updated_at = now() WHERE id = (${pick}) AND status = 'stale' RETURNING id, turns, player, nickname`;
+    if (!old) return null;
+    await tx`INSERT INTO sessions (id, gen, player, nickname, transcript, turns) VALUES (${newId}, ${gen}, ${old.player}, ${nickname ?? old.nickname}, '[]', ${old.turns})`;
+    // a zero-amount stake row ties the new game to the money that paid for the old one, so the new
+    // game can itself be carried over if it is interrupted again. it adds nothing to the pot.
+    await tx`INSERT INTO stakes (session_id, player, amount, tx_hash, via) VALUES (${newId}, ${old.player}, 0, ${'carry:' + old.id}, 'carry')`;
+    return { from: old.id, turns: old.turns, player: old.player };
+  }) as any;
+}
+export const sessionPaid = async (id: string) => (await sql`SELECT 1 FROM stakes WHERE session_id = ${id} LIMIT 1`).length > 0;
+
 /** one open game per purse at a time: you are either playing or you are not. */
 export const openSessionFor = async (player: string) =>
   (await sql<SessionRow[]>`SELECT * FROM sessions WHERE player = ${player.toLowerCase()} AND status = 'open' AND updated_at > now() - interval '30 minutes' ORDER BY updated_at DESC LIMIT 1`)[0];
@@ -218,13 +252,13 @@ export const unpaidWins = () => sql<Breach[]>`
   WHERE b.amount > 0 AND b.tx_hash IS NULL ORDER BY b.id ASC LIMIT 20`;
 /** the books: what came in, what went out, what is still owed. */
 export async function books() {
-  const [s] = await sql<any[]>`SELECT COUNT(*)::int AS games, COALESCE(SUM(amount),0)::float AS staked FROM stakes`;
+  const [s] = await sql<any[]>`SELECT COUNT(*) FILTER (WHERE via IS DISTINCT FROM 'carry')::int AS games, COUNT(*) FILTER (WHERE via = 'carry')::int AS carried, COALESCE(SUM(amount),0)::float AS staked FROM stakes`;
   const [p] = await sql<any[]>`SELECT COUNT(*)::int AS wins, COALESCE(SUM(CASE WHEN tx_hash IS NOT NULL THEN amount ELSE paid END),0)::float AS paid FROM breaches WHERE amount > 0`;
   const [o] = await sql<any[]>`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount - paid),0)::float AS owed FROM breaches WHERE tx_hash IS NULL AND amount > 0`;
   const [d] = await sql<any[]>`SELECT COUNT(DISTINCT player)::int AS players FROM stakes`;
   const r6 = (n: number) => Math.round(Number(n) * 1e6) / 1e6;
   const [m] = await sql<any[]>`SELECT COUNT(*)::int AS n FROM stakes WHERE via = 'mpp'`;
-  return { games: s.games, games_by_agents: m.n, players: d.players, staked: r6(s.staked), wins: p.wins, paid: r6(p.paid), unpaid_wins: o.n, owed: r6(o.owed), staked_24h: r6(await stakedLast24h()), paid_24h: r6(await spentLast24h()) };
+  return { games: s.games, games_by_agents: m.n, games_carried_over: s.carried, players: d.players, staked: r6(s.staked), wins: p.wins, paid: r6(p.paid), unpaid_wins: o.n, owed: r6(o.owed), staked_24h: r6(await stakedLast24h()), paid_24h: r6(await spentLast24h()) };
 }
 
 /** a win that never produced the generation after it: unfinished business. */

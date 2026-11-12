@@ -86,6 +86,8 @@ a name on the board is signed by your purse, so nobody can rename your wins.
 
 **starting over.** you can clear the conversation you are in at any time; it takes two presses because it forfeits whatever is left of that game. clearing is not free on purpose: the ai remembers nothing between games, so a fresh context is a real advantage, and if wiping the thread were free the message ceiling on a stake would mean nothing. the public record is a different thing and nobody can clear it: every generation and every winning conversation stays, because that record is the whole point.
 
+**interrupted games.** when someone wins, the ai learns and every game open against the old rules is over. a player who was mid-game paid for a number of messages and did not get them, so the ones left are handed back: a new game against the new rules, at no charge, for exactly the messages that were unused. the page offers it as "carry on"; an agent posts its old session id to `/api/agent/play`. it is given once per interrupted game, only for a game that was paid for, and it adds nothing to the pot. walking away from a game (start over) forfeits it as before.
+
 ## real money
 
 everything above runs on play money by default. one setting moves it to real dollars, and nothing else in the code names a chain.
