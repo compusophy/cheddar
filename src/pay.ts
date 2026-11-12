@@ -12,7 +12,7 @@
  * as a crowd.
  */
 import type express from 'express';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { createClient, http, isAddress } from 'viem';
 import { tempo as tempoMainnet, tempoModerato } from 'viem/chains';
 import * as db from './db';
@@ -20,7 +20,7 @@ import * as treasury from './treasury';
 import * as think from './think';
 import { MAX_TURNS, MAX_MESSAGE_CHARS } from './agent';
 import { WORD, STAKE, JACKPOT_SHARE } from './game';
-import { openPaidSession, runChat, carryOn, playsFree } from './chat';
+import { openPaidSession, runChat, carryOn } from './chat';
 import { net, flag } from './net';
 
 const chain = net.real ? tempoMainnet : tempoModerato;
@@ -32,7 +32,13 @@ const secretKey = (process.env.MPP_SECRET_KEY || '').trim()
   || createHash('sha256').update('cheddar mpp challenge key:' + (process.env.AGENT_PRIVATE_KEY || '').trim()).digest('base64');
 
 type Paid = { payer?: string; reference?: string };
-const payments = new WeakMap<object, Paid>();
+/**
+ * what the payment layer said about a payment it accepted, kept until the request that made it reads
+ * it back. it is keyed by a header this server puts on each request before handing it over: the
+ * layer hands its hooks a copy of the request, not the request, so the request itself is no key.
+ */
+const ASK = 'x-cheddar-ask';
+const payments = new Map<string, Paid>();
 let loaded: Promise<{ mppx: any; Receipt: any; Credential: any }> | null = null;
 function load() {
   return (loaded ||= (async () => {
@@ -48,7 +54,12 @@ function load() {
         // card-funded tempo credits. off until the operator has watched one real credits payment land
         // and seen which address it reports as the payer: a prize goes to the payer.
         ...(flag('MPP_CREDITS') ? { machineTokenEnabled: true } : {}),
-        onPaymentSuccess: (ctx: any) => { if (ctx?.input && typeof ctx.input === 'object') payments.set(ctx.input, { payer: ctx.payer, reference: ctx.receipt?.reference }); },
+        onPaymentSuccess: (ctx: any) => {
+          const ask = ctx?.input?.headers?.get?.(ASK);
+          if (!ask) return;
+          if (payments.size > 500) payments.clear(); // each is read back within the request that set it; this is only a ceiling
+          payments.set(ask, { payer: ctx.payer, reference: ctx.receipt?.reference });
+        },
       } as any)],
     } as any);
     return { mppx, Receipt, Credential };
@@ -81,11 +92,11 @@ function fingerprint(req: express.Request): string | null {
  * payment layer. the payment is recognised by the credential itself, which only its payer holds, and
  * never by a transaction hash a caller names, which anyone can read off the chain.
  */
-async function sameAgain(req: express.Request, res: express.Response, cred: string, was: { tx_hash: string; payer: string | null; session_id: string | null }, claimed: string | null) {
+async function sameAgain(req: express.Request, res: express.Response, cred: string, was: { tx_hash: string; payer: string | null; session_id: string | null }) {
   let sessionId = was.session_id || (await db.sessionOfStake(was.tx_hash));
   if (!sessionId) {
-    const player = claimed || was.payer || (await treasury.senderOf(was.tx_hash, treasury.agentAddress, STAKE));
-    if (!player) return res.status(502).json({ error: 'this payment was taken, but the paying wallet could not be read. send the same request again, with the same payment attached and {"address": "0x…"}: it is not charged twice.', payment: was.tx_hash });
+    const player = was.payer || (await treasury.senderOf(was.tx_hash, treasury.agentAddress, STAKE));
+    if (!player) return res.status(502).json({ error: 'this payment was taken, but the paying wallet could not be read just now. send the same request again with the same payment attached: it is not charged twice, and the wallet is looked up again.', payment: was.tx_hash });
     const s = await openPaidSession(player, req.body?.nickname ?? null, was.tx_hash);
     sessionId = s.status === 200 ? (s.body as any).session : await db.sessionOfStake(was.tx_hash);
     if (!sessionId) return res.status(s.status).json({ ...s.body, payment: was.tx_hash });
@@ -111,6 +122,7 @@ const origin = (req: express.Request) => `${String(req.headers['x-forwarded-prot
 function toRequest(req: express.Request): Request {
   const headers = new Headers();
   for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
+  headers.set(ASK, randomUUID()); // ours, set here whatever the caller sent: how this request finds what the payment layer said about it
   const raw: Buffer | undefined = (req as any).rawBody;
   return new Request(origin(req) + req.originalUrl, { method: req.method, headers, body: req.method === 'GET' || req.method === 'HEAD' ? undefined : (raw ? new Uint8Array(raw) : JSON.stringify(req.body ?? {})) });
 }
@@ -129,7 +141,7 @@ async function facts(req: express.Request) {
     generation: gen.gen, pot, open: up.ok && !flag('CLOSED'),
     stake: STAKE, to_pot: JACKPOT_SHARE, turns_per_game: MAX_TURNS, max_message_chars: MAX_MESSAGE_CHARS,
     money: { network: `tempo ${net.name}`, chain_id: net.chainId, token: net.symbol, token_address: net.token, real: net.real, paid_to: treasury.agentAddress },
-    play: { method: 'POST', url: `${base}/api/agent/play`, body: { nickname: 'optional, shown on the board', address: 'optional: where a prize goes. default: the wallet that pays' }, pays: `${STAKE} ${net.symbol} over mpp (http 402, tempo charge)` },
+    play: { method: 'POST', url: `${base}/api/agent/play`, body: { nickname: 'optional, shown on the board' }, plays_as: 'the wallet that pays. a prize is paid to it.', pays: `${STAKE} ${net.symbol} over mpp (http 402, tempo charge)` },
     say: { method: 'POST', url: `${base}/api/agent/say`, body: { session: 'from play', message: 'what you say to it' }, free: true },
     rules: `${base}/api/state`, history: `${base}/api/history`, guide: `${base}/skill.md`,
   };
@@ -230,7 +242,7 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
         '/api/agent/play': { post: {
           summary: 'buy one game',
           'x-payment-info': { offers: [{ amount: String(Math.round(STAKE * 1e6)), currency: net.token, description: `one game of say cheese (${net.symbol} on tempo ${net.name})`, intent: 'charge', method: 'tempo' }] },
-          requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { nickname: { type: 'string' }, address: { type: 'string' } } } } } },
+          requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { nickname: { type: 'string' } } } } } },
           responses: { '200': { description: 'a session to play with' }, '402': { description: 'Payment Required' }, '503': { description: 'closed, asleep or learning. nothing charged.' } },
         } },
         '/api/agent/say': { post: {
@@ -249,22 +261,24 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
     if (limited(req, 30, 'play')) return res.status(429).json({ error: 'slow down' });
     let taken: string | null = null; // the payment, from the moment it has been taken
     try {
-      const claimed = req.body?.address;
-      if (claimed !== undefined && claimed !== null && claimed !== '' && !isAddress(String(claimed))) return res.status(400).json({ error: 'address: a tempo address, or leave it out and the wallet that pays is used' });
-      // the machine's address plays outside the rate limits and can win nothing. nobody buys a game as it.
-      if (claimed && playsFree(String(claimed))) return res.status(400).json({ error: 'address: that one is the machine\'s. use your own, or leave it out.' });
+      // a game is played by the wallet that pays for it, and its prize is paid there. this door used to
+      // take an "address" to play as instead. anyone could name anyone: a game bought in a rival's name
+      // closed the game the rival had open and handed its replacement to the buyer, for the price of a stake.
+      const named = req.body?.address;
+      const elsewhere = named !== undefined && named !== null && named !== '';
       // the same request, sent again with the same payment attached, is the same purchase. it is answered
       // with the game that payment bought and nothing is charged twice: an answer lost on the way, or a
       // game that could not be opened the first time, costs the payer one more request and nothing else.
       const cred = fingerprint(req);
       const before = cred ? await db.agentPayment(cred) : undefined;
-      if (cred && before) return void (await sameAgain(req, res, cred, before, claimed ? String(claimed) : null));
+      if (cred && before) return void (await sameAgain(req, res, cred, before));
       const { mppx, Receipt, Credential } = await load();
       const request = toRequest(req);
       // everything that could refuse the game is checked before any money is asked for, or taken. but a
       // payment the payer has already sent themselves is not turned away for any of it: the money has
       // moved, so the game is theirs, exactly as a stake that has left a purse always becomes a game.
       const moved = movedAlready(Credential, request);
+      if (elsewhere && !moved) return res.status(400).json({ error: '"address" is not taken: a game is played by, and its prize paid to, the wallet that pays for it. leave it out. nothing was charged.' });
       const [up, learning] = await Promise.all([think.awake(), db.lockSince('harden')]);
       if (!moved && !up.ok) return res.status(503).json({ error: `it is asleep: ${up.why}. nothing was charged.`, asleep: true, ...(up.wakesIn ? { retry_after: up.wakesIn } : {}) });
       if (!moved && learning) return res.status(503).json({ error: 'it is learning from a win. nothing was charged. try again in a minute.', retry_after: 30 });
@@ -282,21 +296,24 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       if (paid.status === 402) return void (await reply(res, paid.challenge));
 
       // paid. from here on the money has moved, so every path below either seats the player or says exactly what happened.
-      const seen = payments.get(request) || {};
+      const ask = request.headers.get(ASK) || '';
+      const seen = payments.get(ask) || {};
+      payments.delete(ask);
       let tx = seen.reference;
       if (!tx) { try { tx = Receipt.fromResponse(paid.withReceipt(new Response(null)))?.reference; } catch { /* no receipt header */ } }
       if (!tx) { console.error('[agent] a payment verified but carried no reference'); return void (await reply(res, paid.withReceipt(Response.json({ error: 'paid, but the payment carried no reference. tell the operator.' }, { status: 502 })))); }
       taken = tx;
-      const payer = (seen.payer && isAddress(seen.payer) ? seen.payer : null) || (await treasury.senderOf(tx, treasury.agentAddress, STAKE));
-      // written down before anything else is done with it: if the game cannot be opened now, the same
-      // request sent again finds the payment here and opens it then.
-      if (cred) await db.noteAgentPayment(cred, tx, payer).catch((e) => console.error('[agent] a payment was taken and could not be noted:', tx, (e as Error).message));
-      const player = claimed ? String(claimed) : payer;
-      if (!player) { console.error(`[agent] stake ${tx} verified but no payer could be read`); return void (await reply(res, paid.withReceipt(Response.json({ error: 'paid, but the paying wallet could not be read. send the same request again, with the same payment attached and {"address": "0x…"}: it is not charged twice.', payment: tx }, { status: 502 })))); }
+      // written down before anything else is done with it, with the payer the payment layer named if it
+      // named one: if the game cannot be opened now, the same request sent again finds the payment here.
+      const told = seen.payer && isAddress(seen.payer) ? seen.payer : null;
+      if (cred) await db.noteAgentPayment(cred, tx, told).catch((e) => console.error('[agent] a payment was taken and could not be noted:', tx, (e as Error).message));
+      // the player is whoever paid: as the payment layer reports it, or failing that as the chain does.
+      const player = told || (await treasury.senderOf(tx, treasury.agentAddress, STAKE));
+      if (!player) { console.error(`[agent] stake ${tx} verified but no payer could be read`); return void (await reply(res, paid.withReceipt(Response.json({ error: 'paid, but the paying wallet could not be read just now. send the same request again with the same payment attached: it is not charged twice, and the wallet is looked up again.', payment: tx }, { status: 502 })))); }
       const s = await openPaidSession(player, req.body?.nickname ?? null, tx);
       if (s.status !== 200) return void (await reply(res, paid.withReceipt(Response.json({ ...s.body, payment: tx }, { status: s.status }))));
       if (cred) await db.seatAgentPayment(cred, (s.body as any).session).catch(() => { /* the stake itself says which game it bought */ });
-      console.log(`[agent] ${player} bought a game over mpp (${tx})`);
+      console.log(`[agent] ${player} bought a game over mpp (${tx}), payer as ${told ? 'named by the payment layer' : 'read from the chain'}`);
       const base = origin(req);
       await reply(res, paid.withReceipt(Response.json({
         ok: true, session: s.body.session, generation: s.body.gen, pot: s.body.jackpot, turns_left: MAX_TURNS,
@@ -307,6 +324,7 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
         ...(moved && learning ? { note: 'your payment had already been made, so the game is yours. it is learning from a win right now: when it has, this game is carried over to the new rules at no charge (the answer to your next message says how).' }
           : moved && !up.ok ? { note: `your payment had already been made, so the game is yours. it is asleep right now (${up.why}): a message sent while it is asleep is refused and uses none of your turns.` }
           : moved && flag('CLOSED') ? { note: 'your payment had already been made, so the game is yours, though no new games are being sold right now.' } : {}),
+        ...(elsewhere ? { about_address: '"address" is not taken: this game is played by, and its prize is paid to, the wallet that paid.' } : {}),
       })));
     } catch (e) {
       console.error('[agent] play', e);

@@ -254,6 +254,8 @@ async function main() {
   const paidOnes = [p1, p2].filter((r) => r.status === 200);
   check('one payment presented twice at once opens one game', paidOnes.length === 1, `${p1.status} ${p2.status}`);
   const game = await paidOnes[0].json() as any;
+  check('the game is played by the wallet that paid, and a prize goes there', String(game.playing_as).toLowerCase() === agent.address.toLowerCase() && String(game.prize_goes_to).toLowerCase() === agent.address.toLowerCase(), `${game.playing_as} ${game.prize_goes_to}`);
+  check('who paid is taken from the payment layer, with no second look at the chain', /bought a game over mpp .*payer as named by the payment layer/.test(logs.game) && !/payer as read from the chain/.test(logs.game), (logs.game.match(/.*bought a game over mpp.*/) || [''])[0].slice(0, 200));
   // the same request sent again, as an agent would after an answer got lost: the same purchase, not a new one.
   const potOnce = (await api('/state')).jackpot;
   const asked = await fetch(BASE + '/api/agent/play', credentialed);
@@ -271,6 +273,16 @@ async function main() {
   await until('the agent to be paid', async () => (await bal(agent.address)) > agentMid + potA - 0.01);
   check('and is paid to the wallet that paid', near(await bal(agent.address), agentMid + potA), String((await bal(agent.address)) - agentMid));
   check('nobody can buy a game in the machine\x27s name', (await post('/agent/play', { address: machine })).status === 400);
+  // or in anyone else's. it used to be possible: a game bought in a rival's name closed the rival's own
+  // game and left the buyer holding the one that replaced it.
+  const rival = await playing('rival');
+  await say(rival.session, 'i am in the middle of something');
+  const named = await fetch(BASE + '/api/agent/play', { method: 'POST', headers: J, body: JSON.stringify({ nickname: 'agent', address: rival.address }) });
+  const namedBody = await named.json() as any;
+  check('a game cannot be bought in another purse\x27s name: it is refused before any price is asked', named.status === 400 && /nothing was charged/.test(namedBody.error || ''), `${named.status} ${JSON.stringify(namedBody).slice(0, 160)}`);
+  const still = await rival.peek();
+  check('and the game that purse had open is untouched', still.session === rival.session && still.turnsLeft === state.max_turns - 1, JSON.stringify({ session: still.session === rival.session, left: still.turnsLeft }));
+  await post('/abandon', { session: rival.session });
   // a payment that was taken, and whose game was never opened: what is left when the server falls over
   // between the two. the game is opened and then undone by hand here, leaving only the note of the payment.
   const lost = await mppx.preparePayment(await fetch(BASE + '/api/agent/play', init()), { request: init() });
