@@ -143,6 +143,7 @@ npm run think           # can the house think? shows the wallet, its balance, th
 npm run dev             # http://localhost:3000
 npm test
 npm run test:payout     # the payout against the testnet. refuses any database that is not local.
+npm run test:e2e        # the whole game on play money: its own model, its own house wallet. same refusal.
 ```
 
 to run everything on play money, with no real dollars at all, start the stand-in model. it charges over mpp on the testnet and answers with a few lines of code instead of a network, which is enough to exercise every part of the loop: the stake, the paid reply, the win, the rewrite, the regression replay, the payout.
@@ -153,6 +154,8 @@ THINK_URL=http://localhost:4021/v1/chat/completions THINK_NETWORK=testnet npm ru
 ```
 
 it says the word when a message contains `trick <something>` and its rules do not mention <something> yet.
+
+`npm run test:e2e` uses it to play the whole game against itself in about two minutes: it starts the stand-in model and a copy of the game with a house wallet it makes up and fills from the faucet, then checks every way money moves and every way it was once possible to get more than was paid for (one stake presented many times, many messages at once, two winners at the same moment, a payment replayed at the agent door, the pot being spent on thinking). it wipes the database it is given, so it refuses one that is not local.
 
 deploy with `vercel deploy --prod`. storage is neon postgres via the vercel marketplace. the earlier, more elaborate version of this project (an ai treasurer, three tiers, a purchase-order registry) lives in git history and in `redteam/log.md`.
 

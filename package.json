@@ -11,7 +11,8 @@
     "test": "ts-node scripts/test.ts",
     "seller": "ts-node scripts/seller.ts",
     "think": "ts-node scripts/think.ts",
-    "test:payout": "ts-node scripts/test-payout.ts"
+    "test:payout": "ts-node scripts/test-payout.ts",
+    "test:e2e": "ts-node scripts/test-e2e.ts"
   },
   "dependencies": {
     "@vercel/functions": "^3.9.7",
