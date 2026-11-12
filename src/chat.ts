@@ -158,7 +158,7 @@ export async function runChat(sessionId: string, message: string, onDelta?: (t: 
   // the lesson is picked back up here, and the caller is told to come back.
   if (await db.unfinishedWin()) return { status: 503, body: { error: 'it lost a moment ago and is about to learn from it. try again in a minute.' }, hardening: resumeHardening() };
   // one message at a time in a game. everything below reads the game again, now that nothing else can change it.
-  if (!(await db.beginTurn(seen.id))) return { status: 429, body: { error: 'one message at a time: wait for the reply.', retryIn: 2 } };
+  if (!(await db.beginTurn(seen.id))) return { status: 429, body: { error: 'one message at a time: wait for the reply.', retryIn: 2, why: 'busy' } };
   try {
     return await turn((await db.getSession(seen.id))!, message.trim(), onDelta);
   } finally {
@@ -182,9 +182,11 @@ async function turn(s: db.SessionRow, message: string, onDelta?: (t: string) => 
   // silent until hit, and the machine plays outside them.
   if (!FREE_PLAYERS.has(s.player)) {
     const mine = await db.rateAllow(`p:${s.player}`, RATE.player.max, RATE.player.seconds);
-    if (mine) return { status: 429, body: { error: `easy — ${mine}s`, retryIn: mine } };
+    // a refusal for being busy says which kind and for how long. the message did not count: the page
+    // waits it out and sends it again by itself, and an agent can do the same.
+    if (mine) return { status: 429, body: { error: `easy — ${mine}s`, retryIn: mine, why: 'fast' } };
     const all = await db.rateAllow('global', RATE.global.max, RATE.global.seconds);
-    if (all) return { status: 429, body: { error: `everyone is playing at once. ${all}s`, retryIn: all } };
+    if (all) return { status: 429, body: { error: `everyone is playing at once. ${all}s`, retryIn: all, why: 'crowd' } };
   }
 
   const history: Turn[] = JSON.parse(s.transcript);

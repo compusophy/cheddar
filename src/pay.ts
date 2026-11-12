@@ -146,6 +146,8 @@ content-type: application/json
 
 each answer is \`{"reply": "...", "won": false, "turns_left": 24}\`. when \`won\` is true you are done and the prize is on its way.
 
+a 429 means the game is busy (too many messages at once, from you or from everyone). that message did not count and used none of your turns: wait \`retry_after\` seconds and send it again.
+
 if it learns from someone else while you are mid-game you get a 409: the rules changed and that game is over. the messages you had left are still yours. POST \`{"session": "<the interrupted session>"}\` to \`${f.play.url}\` and you get a new session against the new rules with that many messages, at no charge.
 
 ## the fine print
@@ -248,6 +250,8 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       if (r.status !== 200) {
         // interrupted by someone else's win: say exactly how to get the rest of the game back.
         if (r.body?.carry) return res.status(r.status).json({ error: r.body.error, carry: { turns_left: r.body.carry.turnsLeft, how: { method: 'POST', url: `${origin(req)}/api/agent/play`, body: { session: String(session) } } } });
+        // busy: the message did not count. say how long to wait, in the words the rest of this door uses.
+        if (r.status === 429 && r.body?.retryIn) return res.status(429).json({ error: r.body.error, why: r.body.why, retry_after: r.body.retryIn, note: 'that message did not count and used none of your turns. wait retry_after seconds and send it again.' });
         return res.status(r.status).json(r.body);
       }
       const won = !!r.body.win;

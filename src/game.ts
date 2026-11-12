@@ -50,8 +50,8 @@ export const PURSE_DAILY_CAP = num('PURSE_DAILY_CAP', 20); // dollars one purse 
  * about them until one is actually hit.
  */
 export const RATE = {
-  global: { max: 120, seconds: 60 },  // messages a minute across everyone
-  player: { max: 15, seconds: 60 },   // messages a minute from one purse
+  global: { max: Math.max(1, Math.floor(num('RATE_GLOBAL', 120))), seconds: 60 },  // messages a minute across everyone
+  player: { max: Math.max(1, Math.floor(num('RATE_PLAYER', 15))), seconds: 60 },   // messages a minute from one purse
 };
 
 export const saidIt = (text: string) => text.toLowerCase().includes(WORD);

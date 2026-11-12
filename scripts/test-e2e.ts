@@ -159,6 +159,7 @@ async function main() {
   check('with the receipt of the payment that bought it', first.turns?.[1]?.paid?.cost > 0 && /^0x[0-9a-f]{64}$/i.test(first.turns?.[1]?.paid?.tx || ''), JSON.stringify(first.turns?.[1]?.paid));
   const burst = await Promise.all([0, 1, 2, 3, 4].map((i) => say(session, `at once ${i}`)));
   check('five messages at once get one reply', burst.filter((r) => r.status === 200).length === 1 && burst.filter((r) => r.status === 429).length === 4, `${burst.map((r) => r.status)}`);
+  check('and the other four are told it is busy, and when to send again', burst.filter((r) => r.status === 429).every((r) => r.why === 'busy' && r.retryIn > 0), JSON.stringify(burst.find((r) => r.status === 429)));
   const seen = await a.peek();
   check('and the game counts exactly the messages that were answered', seen.turnsLeft === state.max_turns - 2 && seen.transcript.length === 4, `${seen.turnsLeft} left, ${seen.transcript?.length} lines`);
   await post('/abandon', { session });
@@ -260,6 +261,14 @@ async function main() {
   await books();
   const resumed = await say(mid.session, 'and now?');
   check('with the pot back to normal it carries on, having lost no messages', resumed.status === 200 && resumed.turnsLeft === state.max_turns - 2, JSON.stringify({ status: resumed.status, left: resumed.turnsLeft }));
+
+  console.log('a crowd speaks at once');
+  // every reply is a payment out of the one house wallet. if two of them could collide, this is where they would.
+  const crowd = await Promise.all(Array.from({ length: 8 }, (_, i) => playing('crowd' + i)));
+  const chorus = await Promise.all(crowd.map((p, i) => say(p.session, `hello from player ${i}`)));
+  check('eight players in eight games, all at the same moment: eight replies', chorus.every((r) => r.status === 200), `${chorus.map((r) => r.status)} ${chorus.find((r) => r.status !== 200)?.error ?? ''}`);
+  const bought = new Set(chorus.map((r) => String(r.turns?.[1]?.paid?.tx || '').toLowerCase()).filter((t) => /^0x[0-9a-f]{64}$/.test(t)));
+  check('each bought with a payment of its own', bought.size === 8, `${bought.size} distinct payments`);
 
   console.log('the books add up');
   b = await books();

@@ -287,7 +287,8 @@ async function resumeIfOpen() {
 /** the reply streams in over server-sent events; each token lands in the bubble as it arrives. */
 async function chatStream(text, onDelta) {
   const r = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify({ session: session.id, message: text }) });
-  if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); throw new Error(j.error || r.statusText); }
+  // a refusal keeps what the server said with it: whether it answered at all, and how long to wait if it is busy.
+  if (!r.ok || !r.body) { const j = await r.json().catch(() => ({})); throw Object.assign(new Error(j.error || r.statusText), { status: r.status, body: j }); }
   const reader = r.body.getReader(), dec = new TextDecoder();
   let buf = '', final = null;
   while (true) {
@@ -303,7 +304,7 @@ async function chatStream(text, onDelta) {
     }
   }
   if (!final) throw new Error('lost the connection');
-  if (final.status !== 200) throw new Error(final.error || 'something broke');
+  if (final.status !== 200) throw Object.assign(new Error(final.error || 'something broke'), { status: final.status, body: final });
   return final;
 }
 
@@ -374,23 +375,37 @@ async function watchPayout(before, winId) {
   }
 }
 
+/** why the game asked for a moment, said shortly. the wait is counted down after it. */
+const WAITS = { crowd: 'everyone is playing at once.', fast: 'easy.', busy: 'it is still answering.' };
 let sending = false;
 $('#form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = $('#msg').value.trim(); if (!text || sending) return;
   sending = true; $('#send').disabled = true; $('#send').textContent = '···'; $('#msg').value = ''; $('#msg').style.height = '';
   try { navigator.vibrate?.(8); } catch {}
-  let posted = false;
+  let mine = null, it = null;
   try {
     await ensureSession();
-    bubble('me', esc(text)); posted = true;
-    showTyping();
-    let it = null, acc = '';
-    const r = await chatStream(text, (delta) => {
-      acc += delta;
-      if (!it) { hideTyping(); it = bubble('it', ''); }
-      it.innerHTML = highlight(acc); scrollDown();
-    });
+    mine = bubble('me', esc(text));
+    let acc = '', r;
+    for (let tries = 0; ; tries++) {
+      showTyping();
+      try {
+        r = await chatStream(text, (delta) => {
+          acc += delta;
+          if (!it) { hideTyping(); it = bubble('it', ''); }
+          it.innerHTML = highlight(acc); scrollDown();
+        });
+        break;
+      } catch (err) {
+        hideTyping();
+        // the game is busy, said for how long, and it is not long: wait it out and send the message for them.
+        const wait = Math.ceil(Number(err.body?.retryIn) || 0);
+        if (!(err.status === 429 && wait > 0 && wait <= 30) || tries >= 3) throw err;
+        for (let s = wait; s > 0; s--) { status(`${WAITS[err.body.why] || 'one moment.'} sending yours in ${s}s…`, 'busy'); await sleep(1000); }
+        status('');
+      }
+    }
     hideTyping();
     const reply = r.turns?.find((t) => t.role === 'agent');
     if (reply) { if (!it) it = bubble('it', ''); it.innerHTML = highlight(reply.text); receipt(it, reply.paid); }
@@ -400,10 +415,27 @@ $('#form').addEventListener('submit', async (e) => {
     else if (r.turnsLeft === 0) { note('that is the end of this conversation.'); status(''); end(); }
     else status('');
   } catch (err) {
-    hideTyping(); status(err.message, 'bad');
-    // a message that never reached the thread (no money yet, a stake still landing) goes back in the box.
-    if (!posted && !$('#msg').value) $('#msg').value = text;
-    if (/learn|session is|run its course/.test(err.message)) end();
+    hideTyping();
+    let said = err.message, kind = 'bad', over = false;
+    const giveBack = () => { mine?.remove(); it?.remove(); if (!$('#msg').value) $('#msg').value = text; };
+    if (!mine) giveBack(); // it never reached the thread (no money yet, a stake still landing): back in the box.
+    else {
+      // the message is on the thread, and it stays there only if the game has it. a refusal means it
+      // does not. when the answer was lost on the way, nobody here knows: the game is asked what it has.
+      const refused = err.status && (err.status < 500 || err.status === 503); // the game's own "no", as against a crash or a timeout
+      const has = refused ? null : await peek().catch(() => null);
+      if (refused) giveBack();
+      else if (has?.session && session && has.turnsLeft < session.turnsLeft) {
+        // the game took it and answered. show what it has, in place of whatever arrived of it here.
+        mine.remove(); it?.remove();
+        for (const t of has.transcript.slice(-2)) { if (t.role === 'user') bubble('me', esc(t.text)); else receipt(bubble('it', highlight(t.text)), t.paid); }
+        session.turnsLeft = has.turnsLeft; said = ''; kind = '';
+      } else if (has?.session) { giveBack(); said = 'that did not get through. it is back in the box: send it again.'; } // the game is open and never saw it.
+      else if (has) { said = 'lost the connection, and that game has ended. history shows how.'; over = true; }
+      // and if the game could not be asked either, the thread is left as it is.
+    }
+    status(said, kind);
+    if (over || /learn|session is|run its course/.test(err.message)) end();
   }
   sending = false; $('#send').disabled = false; $('#send').textContent = 'send'; $('#msg').focus();
 });
