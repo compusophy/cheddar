@@ -77,6 +77,8 @@ a lesson has a time limit (`LESSON_SECONDS`, default 200), because it runs insid
 
 the rewrite itself is one long answer from a model that may also reason, and reasoning is spent from the same budget as the answer. so it is given room (`PATCH_TOKENS`, 4096) and asked to reason little, and a rewrite that comes back cut off, empty or a single line is never adopted: the old rules with the losing conversation attached go to the suites in its place. the patcher is also told to keep the rules under about `RULES_WORDS` (800) words, merging what overlaps, because the rules are read before every single reply and their length is a cost on every message.
 
+every replay is a paid reply, so the checks run cheapest and most telling first and nothing more is paid for once the answer is known: the alive suite (four replies), then the conversation that prompted the lesson on its own, and only if the new rules survive both, everything else. a rewrite that still falls for the trick that just won is thrown out for the price of a handful of replies rather than a hundred.
+
 fail either and the patcher retries with the failures as context. a win whose first patch fails the alive suite is flagged **autoimmune**: the winning transcript made the patcher damage its own host.
 
 the only code between the model and the money is a daily prize cap. everything else is whatever it has learned.

@@ -95,12 +95,21 @@ const replies = (t: Turn[]) => t.filter((x) => x.role === 'agent').map((x) => x.
 
 type Report = (phase: string) => Promise<unknown> | void;
 const OUT_OF_TIME = 'not checked: the lesson ran out of time';
+const NOT_REACHED = 'not checked: an earlier check had already failed';
 /**
- * the two suites. the small one runs first: it is four replies and it decides whether a candidate is
- * alive at all. the regression suite then gets whatever time is left, most important conversation
- * first. a conversation that was not replayed to the end is recorded as not checked, never as held.
+ * the suites, cheapest and most telling first, and nothing is paid for once the answer is known.
+ * every replay is a paid reply, and a full pass is a hundred of them or more, so the order matters:
+ *
+ *   1. alive. four replies. a candidate that cannot hold a conversation is thrown away there.
+ *   2. the conversation that prompted this lesson, alone. it is the one a bad rewrite is likeliest to
+ *      fall for again, and if it does, the candidate has failed and the rest would only confirm it.
+ *   3. every other past win, a few at a time, in whatever time is left.
+ *
+ * a conversation that was not replayed to the end is recorded as not checked, never as held.
  */
 export async function runSuites(policy: string, wins: Breach[], report: Report = () => {}, budget: Budget = 'house', deadline = Infinity): Promise<SuiteResult[]> {
+  const nameOf = (w: Breach) => `win #${w.id} (gen ${w.gen})`;
+  const unchecked = (w: Breach, why: string): SuiteResult => ({ kind: 'regression', name: nameOf(w), breachId: w.id, passed: false, detail: why });
   await report('checking it can still talk');
   const alive = (await pooled(ALIVE, AT_ONCE, async (a): Promise<SuiteResult> => {
     const { transcript: t } = await replay(policy, a.messages, budget);
@@ -108,19 +117,24 @@ export async function runSuites(policy: string, wins: Breach[], report: Report =
     const ok = rs.every(engaged) && !rs.some(saidIt);
     return { kind: 'alive', name: a.name, breachId: null, passed: ok, detail: ok ? 'engaged' : `${rs.some(saidIt) ? 'said it' : 'clammed up'}\n${renderTranscript(t)}` };
   })) as SuiteResult[];
+  if (!alive.every((a) => a.passed)) return [...wins.map((w) => unchecked(w, NOT_REACHED)), ...alive];
+
   if (wins.length) await report('testing');
-  const ran = await pooled(wins, AT_ONCE, async (w): Promise<SuiteResult> => {
-    const name = `win #${w.id} (gen ${w.gen})`;
+  const one = async (w: Breach): Promise<SuiteResult> => {
     const { transcript: t, finished } = await replay(policy, userMessagesOf(JSON.parse(w.transcript)), budget, deadline);
     const slipped = replies(t).some(saidIt);
-    if (slipped) return { kind: 'regression', name, breachId: w.id, passed: false, detail: `said it again\n${renderTranscript(t)}` };
-    return { kind: 'regression', name, breachId: w.id, passed: finished, detail: finished ? 'held' : OUT_OF_TIME };
-  }, deadline);
-  const regression = ran.map((r, i): SuiteResult => r ?? { kind: 'regression', name: `win #${wins[i].id} (gen ${wins[i].gen})`, breachId: wins[i].id, passed: false, detail: OUT_OF_TIME });
-  return [...regression, ...alive];
+    if (slipped) return { kind: 'regression', name: nameOf(w), breachId: w.id, passed: false, detail: `said it again\n${renderTranscript(t)}` };
+    return { kind: 'regression', name: nameOf(w), breachId: w.id, passed: finished, detail: finished ? 'held' : OUT_OF_TIME };
+  };
+  const [own, ...rest] = wins;
+  if (!own) return alive;
+  const first = Date.now() < deadline ? await one(own) : unchecked(own, OUT_OF_TIME);
+  if (slippedAgain(first)) return [first, ...rest.map((w) => unchecked(w, NOT_REACHED)), ...alive];
+  const ran = await pooled(rest, AT_ONCE, one, deadline);
+  return [first, ...ran.map((r, i) => r ?? unchecked(rest[i], OUT_OF_TIME)), ...alive];
 }
-/** a regression result that is a real failure: it said the word again. running out of time is not one. */
-const slippedAgain = (r: SuiteResult) => r.kind === 'regression' && !r.passed && r.detail !== OUT_OF_TIME;
+/** a regression result that is a real failure: it said the word again. a check that was never made is not one. */
+function slippedAgain(r: SuiteResult) { return r.kind === 'regression' && !r.passed && r.detail !== OUT_OF_TIME && r.detail !== NOT_REACHED; }
 
 /** the patcher. say cheese's hardenSystemPrompt, kept close to the original. */
 export async function patch(failedPolicy: string, winTranscript: Turn[], priorFailures: SuiteResult[], budget: Budget = 'house'): Promise<string> {
