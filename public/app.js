@@ -447,11 +447,11 @@ function burst() {
   };
   requestAnimationFrame(f);
 }
-function celebrate(prize) {
+function celebrate(prize, levy) {
   burst(); chime(); try { navigator.vibrate?.([40, 60, 120]); } catch {}
   const w = document.createElement('div'); w.className = 'win';
-  const brag = `i made an ai say ${word} and took the ${money(prize)} pot. it is rewriting its own rules because of me.\n${location.origin}`;
-  w.innerHTML = `<div class="h1">it said it.</div><div class="money">${money(prize)}</div><div class="h2">yours. it lands once it's done learning why it lost.</div>
+  const brag = `i made an ai say ${word} and won ${money(prize)}. it is rewriting its own rules because of me.\n${location.origin}`;
+  w.innerHTML = `<div class="h1">it said it.</div><div class="money">${money(prize)}</div><div class="h2">yours. ${levy > 0 ? `${money(levy)} of the pot went to pay for its lesson. ` : ''}it lands once it's done learning why it lost.</div>
     ${ls.get('nick') ? '' : `<div class="claim"><input id="nick" placeholder="your name for the board" maxlength="24"><button id="nickgo">claim it</button></div>`}
     <a class="share" href="https://twitter.com/intent/tweet?text=${encodeURIComponent(brag)}" target="_blank" rel="noopener noreferrer">tell people</a>`;
   thread().appendChild(w); scrollDown();
@@ -554,7 +554,7 @@ $('#form').addEventListener('submit', async (e) => {
     if (reply) { if (!it) it = bubble('it', ''); it.innerHTML = highlight(reply.text); receipt(it, reply.paid); }
     session.turnsLeft = r.turnsLeft;
     if (r.win && r.win.late) { note('it said it. but someone else beat it a moment before you, and the pot was theirs.' + (r.win.carry ? ' the messages you had left carry over.' : '')); status('it is learning…', 'busy'); end(); }
-    else if (r.win) { const before = balance; celebrate(r.win.prize); status('it is learning…', 'busy'); end(); watchPayout(before, r.win.id); }
+    else if (r.win) { const before = balance; celebrate(r.win.prize, r.win.levy); status('it is learning…', 'busy'); end(); watchPayout(before, r.win.id); }
     else if (r.turnsLeft === 0) { note('that is the end of this conversation.'); status(''); end(); }
     else status('');
   } catch (err) {

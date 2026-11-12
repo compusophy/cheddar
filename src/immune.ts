@@ -257,8 +257,10 @@ export type HardenOptions = {
    * paying for every replay a second time. so a lesson knows its deadline and always ends inside it.
    */
   deadline?: number;
-  /** a lesson that has already failed to finish: one rewrite, tested only against the win that prompted it. */
+  /** a lesson that has already failed to finish, or has little money: one rewrite, tested only against the win that prompted it. */
   minimal?: boolean;
+  /** real stakes: nobody is coming to fund this house. a rewrite it cannot afford is not waited for: the fallback rules are tested instead. */
+  fallBack?: boolean;
 };
 /** a round is not started with less than this left: a rewrite and a useful part of the suite would not fit. */
 const ROUND_FLOOR_MS = 40_000;
@@ -295,8 +297,12 @@ export async function harden(failedPolicy: string, win: Breach, allWins: Breach[
     let candidate: string;
     try { candidate = await within(patch(failedPolicy, winTranscript, failures, budget), left() - 15_000); }
     catch (e) {
-      const outOfShare = shareGone(e, till);
-      if (!(e instanceof TimeUp) && !outOfShare) throw e;
+      // a rewrite is the dear part of a lesson, and the replies that test it cost a hundredth as much.
+      // where falling back is allowed, a rewrite that cannot be afforded is replaced by the fallback
+      // rules and the tests still run: the till is not emptied by it.
+      const poor = !!opts.fallBack && !best && e instanceof Broke && e.kind === 'asleep';
+      const outOfShare = !poor && shareGone(e, till);
+      if (!(e instanceof TimeUp) && !outOfShare && !poor) throw e;
       if (best) break; // a tested candidate already exists; keep it
       if (outOfShare) throw e; // no rewrite, and no money to ask for one: nothing to ship. it waits.
       candidate = stopgap(failedPolicy, winTranscript);

@@ -302,7 +302,8 @@ async function main() {
   for (const [id, p] of [['win-a', w1], ['win-b', w2], ['win-m', wm], ['win-c', w1], ['win-d', w2]] as const) { await db.createSession(id, G, p, null); await db.recordStake(id, p, 0.25, '0x' + Buffer.from(id.padEnd(32, '.')).toString('hex'), 0); }
   const potWas = await db.jackpot();
   await db.sql`UPDATE jackpot SET amount = 7.5 WHERE id = 1`;
-  const m = await db.recordWin({ gen: G, sessionId: 'win-m', player: wm, nickname: null, transcript: [], turns: 3, paying: false });
+  const m = await db.recordWin({ gen: G, sessionId: 'win-m', player: wm, nickname: null, transcript: [], turns: 3, paying: false, levy: { share: 0.2, upTo: 9 } });
+  check('the machine wins nothing, and nothing is kept back from a pot it did not take', m.prize === 0 && m.levy === 0);
   check('the machine wins nothing, and the pot stays where it is', m.prize === 0 && !m.late && Math.abs((await db.jackpot()) - 7.5) < 1e-9, JSON.stringify(m));
   const [ra, rb] = await Promise.all([
     db.recordWin({ gen: G, sessionId: 'win-a', player: w1, nickname: null, transcript: [], turns: 4, paying: true }),
@@ -321,7 +322,24 @@ async function main() {
   check('the next generation has its own pot to give', !next.late && Math.abs(next.prize - JACKPOT_SEED) < 1e-9, JSON.stringify(next));
   const owedNow = await db.sql<{ n: number; t: number }[]>`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::float AS t FROM breaches WHERE gen IN (${G}, ${G + 1})`;
   check('all told, what was won is the pot and one seed, whatever the number of wins', owedNow[0].n === 5 && Math.abs(owedNow[0].t - (7.5 + JACKPOT_SEED)) < 1e-9, JSON.stringify(owedNow[0]));
-  await db.sql`DELETE FROM breaches WHERE gen IN (${G}, ${G + 1})`;
+  // real stakes: what the house lacks for the lesson is kept back from the pot, within its share of it.
+  const about = (a: number, b: number) => Math.abs(a - b) < 1e-9;
+  const kept = async (gen: number, id: string, levy: { share: number; upTo: number }) => {
+    await db.createSession(id, gen, w1, null);
+    await db.sql`UPDATE jackpot SET amount = 1 WHERE id = 1`;
+    return db.recordWin({ gen, sessionId: id, player: w1, nickname: null, transcript: [], turns: 1, paying: true, levy });
+  };
+  const k1 = await kept(G + 2, 'win-k1', { share: 0.2, upTo: 0.5 });
+  check('a house short of a lesson keeps back its share of the pot, and no more', about(k1.prize, 0.8) && about(k1.levy, 0.2), JSON.stringify(k1));
+  const k2 = await kept(G + 3, 'win-k2', { share: 0.2, upTo: 0.03 });
+  check('a house that lacks a little keeps back only that', about(k2.prize, 0.97) && about(k2.levy, 0.03), JSON.stringify(k2));
+  const k3 = await kept(G + 4, 'win-k3', { share: 0.2, upTo: 0 });
+  check('a house that can afford the lesson keeps nothing', k3.prize === 1 && k3.levy === 0, JSON.stringify(k3));
+  const k4 = await kept(G + 5, 'win-k4', { share: 9, upTo: 9 });
+  check('whatever is asked for, never more than half a pot', about(k4.prize, 0.5) && about(k4.levy, 0.5), JSON.stringify(k4));
+  const [row] = await db.sql<{ amount: number; levy: number }[]>`SELECT amount, levy FROM breaches WHERE id = ${k1.winId}`;
+  check('the win records the prize and what was kept, and together they are the pot', about(Number(row.amount) + Number(row.levy), 1), JSON.stringify(row));
+  await db.sql`DELETE FROM breaches WHERE gen BETWEEN ${G} AND ${G + 5}`;
   await db.sql`DELETE FROM stakes WHERE session_id LIKE 'win-%'`;
   await db.sql`DELETE FROM sessions WHERE id LIKE 'win-%'`;
   await db.sql`UPDATE jackpot SET amount = ${potWas} WHERE id = 1`;

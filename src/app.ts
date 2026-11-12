@@ -80,7 +80,9 @@ async function makeState() {
     // it is not, the page takes no stake. answers: a message in a game that is already open would be
     // answered: there is money for a reply, and no lost game waiting to be learned from. the two
     // differ when there is money for thoughts and not for a lesson.
-    awake: up.ok, asleep: up.ok ? null : up.why, ...(up.wakesIn ? { wakes_in: up.wakesIn } : {}), answers: reply.ok && !unlearned, model: MODEL, thinks: think.describe(),
+    awake: up.ok, asleep: up.ok ? null : up.why, ...(up.wakesIn ? { wakes_in: up.wakesIn } : {}), answers: reply.ok && !unlearned,
+    // real stakes: the most of a pot that may be kept back to pay for the lesson its win sets off. 0: the winner takes all of it.
+    levy: think.LEVY, model: MODEL, thinks: think.describe(),
     max_turns: MAX_TURNS, max_chars: MAX_MESSAGE_CHARS,
     machine,
   };
@@ -153,7 +155,7 @@ app.get('/api/win/:id', async (req, res) => {
   const link = (tx: string) => `${net.explorer}/receipt/${tx}`;
   const payments = parts.length ? parts.map((p) => ({ amount: Number(p.amount), tx: p.tx_hash, receipt: link(p.tx_hash), at: p.created_at }))
     : w.tx_hash ? [{ amount: Number(w.amount), tx: w.tx_hash, receipt: link(w.tx_hash), at: (w as any).paid_at ?? null }] : [];
-  res.json({ id: w.id, generation: w.gen, prize: w.amount, paid: Math.round((Number(w.amount) - owed) * 1e6) / 1e6, still_owed: owed,
+  res.json({ id: w.id, generation: w.gen, prize: w.amount, ...(Number(w.levy) > 0 ? { kept_for_the_lesson: Number(w.levy) } : {}), paid: Math.round((Number(w.amount) - owed) * 1e6) / 1e6, still_owed: owed,
     tx: w.tx_hash, receipt: w.tx_hash ? link(w.tx_hash) : payments[payments.length - 1]?.receipt ?? null, payments,
     ...(owed > 0 ? await waitingFor(w.id, w.gen, w.player, Number(w.amount) - owed > 0.000001) : {}) });
 });

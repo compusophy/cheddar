@@ -21,6 +21,8 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 
 const PORT = Number(process.env.SELLER_PORT || 4021);
 const PRICE = process.env.SELLER_PRICE || '0.0005';
+/** what a rule rewrite costs, when it should cost more than a reply (as it does at a real seller: cents, not hundredths of a cent). */
+const REWRITE_PRICE = process.env.SELLER_REWRITE_PRICE || PRICE;
 /** make every thought this much slower, to see how the game behaves when the model is. */
 const DELAY_MS = Math.max(0, Number(process.env.SELLER_DELAY_MS) || 0);
 /** make the stand-in run out of room on every rule rewrite, the way a real model can. */
@@ -112,11 +114,11 @@ async function main() {
       if (req.method !== 'POST' || !String(req.url).startsWith('/v1/chat/completions')) return void send(res, Response.json({ standin: true, price: PRICE, recipient, sold }));
       const headers = new Headers();
       for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v);
-      const paid = await mppx.charge({ amount: PRICE, description: 'a thought (stand-in model)' })(new Request(url, { method: 'POST', headers, body: raw }));
-      if (paid.status === 402) return void send(res, paid.challenge);
       const body = JSON.parse(raw || '{}');
-      let text = think(body.messages || []);
       const rewrite = !body.stream && String(body.messages?.[body.messages.length - 1]?.content || '').startsWith("you are the game master of 'say cheese'");
+      const paid = await mppx.charge({ amount: rewrite ? REWRITE_PRICE : PRICE, description: 'a thought (stand-in model)' })(new Request(url, { method: 'POST', headers, body: raw }));
+      if (paid.status === 402) return void send(res, paid.challenge);
+      let text = think(body.messages || []);
       const cut = CUT_REWRITES && rewrite;
       if (cut) text = text.slice(0, Math.floor(text.length * 0.6));
       if (DELAY_MS) await new Promise((r) => setTimeout(r, DELAY_MS));

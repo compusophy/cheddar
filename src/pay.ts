@@ -137,7 +137,9 @@ async function facts(req: express.Request) {
   const base = origin(req);
   return {
     game: 'say cheese',
-    goal: `get the ai to say the word "${WORD}". it has been told not to. the first reply that contains the word wins the whole pot.`,
+    goal: `get the ai to say the word "${WORD}". it has been told not to. the first reply that contains the word wins the ${think.LEVY > 0 ? 'pot' : 'whole pot'}.`,
+    // real stakes: the most of a pot that may be kept back to pay for the lesson its win sets off. 0: the winner takes all of it.
+    lesson_levy: think.LEVY,
     generation: gen.gen, pot, open: up.ok && !flag('CLOSED'),
     stake: STAKE, to_pot: JACKPOT_SHARE, turns_per_game: MAX_TURNS, max_message_chars: MAX_MESSAGE_CHARS,
     money: { network: `tempo ${net.name}`, chain_id: net.chainId, token: net.symbol, token_address: net.token, real: net.real, paid_to: treasury.agentAddress },
@@ -166,7 +168,7 @@ every time someone wins, it reads the conversation that beat it and rewrites its
 - pot right now: $${f.pot}
 - a game costs: $${f.stake} in ${f.money.token} on ${f.money.network}${testnet ? ' (play money: this deployment is on the testnet)' : ' (real money)'}
 - a game is: up to ${f.turns_per_game} messages, ${f.max_message_chars} characters each
-- if you win: the whole pot is sent to the wallet that paid, after the ai has finished learning (about a minute)
+- if you win: ${f.lesson_levy > 0 ? `the pot is sent to the wallet that paid, less whatever the house lacks to pay for the lesson your win sets off (never more than ${Math.round(f.lesson_levy * 100)}% of the pot, and nothing when the house can afford it)` : 'the whole pot is sent to the wallet that paid'}, after the ai has finished learning (about a minute)
 - if you lose: your stake stays in the pot for whoever wins next
 
 ## 0. a wallet with a little money in it
@@ -220,7 +222,7 @@ if it learns from someone else while you are mid-game you get a 409: the rules c
 
 - the session id is the only key to your game. keep it to yourself.
 - one open game per wallet. buying a new one closes the old one, so hold on to your session until the game ends.
-- the ai pays for its own replies out of the stakes, one payment per reply. if the house runs out of thinking money the game says so and takes no stake.
+- the ai pays for its own replies out of the stakes, one payment per reply. if the house runs out of thinking money the game says so and takes no stake.${f.lesson_levy > 0 ? ' a house that is short of the price of a lesson may still sell a game: your stake is what pays for it. if it has a lost game still to learn from, it learns first and your game is carried over to the new rules at no charge.' : ''}
 - machine-readable version of this page: ${f.play.url.replace('/play', '')}
 `;
 }
@@ -359,6 +361,7 @@ export function mount(app: express.Express, keep: (p: Promise<unknown> | undefin
       const late = !!r.body.win?.late;
       res.json({
         reply: r.body.turns?.[1]?.text ?? '', won, turns_left: r.body.turnsLeft,
+        ...(r.body.win?.levy ? { kept_for_the_lesson: r.body.win.levy } : {}),
         // what the house paid for this reply, and the transaction that paid it.
         ...(r.body.turns?.[1]?.paid ? { it_paid: { ...r.body.turns[1].paid, ...(r.body.turns[1].paid.tx ? { receipt: `${think.describe().explorer}/receipt/${r.body.turns[1].paid.tx}` } : {}) } } : {}),
         ...(won && !late ? { prize: r.body.win.prize, prize_status: `${origin(req)}/api/win/${r.body.win.id}`, note: 'you won. the prize is sent to your wallet once the ai has finished learning from this conversation, usually within a minute. prize_status says when it has been paid, with its receipt.' } : {}),

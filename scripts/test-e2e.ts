@@ -517,6 +517,57 @@ async function main() {
   const wrong = logs.game.split('\n').filter((l) => /paying our own fee|hardening failed|learning from win #\d+ failed|\[payout\].*(failed|refused|never landed)/.test(l) && !l.includes(`learning from win #${winF} failed`));
   check('nothing else went wrong on the way that the game had to work around', wrong.length === 0, (wrong[0] || '').slice(0, 200));
 
+  console.log('real stakes: a house that starts with nothing');
+  // the stakes and the thinking money are one wallet here, as on real money, and this house's wallet is
+  // empty. the first stake pays for the first game, and the win pays for its own lesson out of the pot.
+  const poorKey = generatePrivateKey();
+  const poorHouse = privateKeyToAccount(poorKey).address;
+  await stopOne('game');
+  start('game', 'src/server.ts', { ...gameEnv, AGENT_PRIVATE_KEY: poorKey, JACKPOT_SEED: '0', LESSON_LEVY: '0.2' });
+  await until('the game to come back', async () => (await fetch(BASE + '/api/health')).ok, 120_000);
+  if (!(await fetch(BASE + '/api/admin/reset', { method: 'POST', headers: { authorization: `Bearer ${ADMIN}` } })).ok) throw new Error('could not reset the scratch database');
+  state = await fresh();
+  check('a house with an empty wallet still sells its first game', state.awake === true && state.house.toLowerCase() === poorHouse.toLowerCase() && (await bal(poorHouse)) === 0 && state.jackpot === 0 && state.levy === 0.2, JSON.stringify({ awake: state.awake, asleep: state.asleep, pot: state.jackpot, levy: state.levy, bal: await bal(poorHouse) }));
+  const pioneer = await purse('first');
+  await fund(pioneer.address);
+  await until('the first player to have money', async () => (await pioneer.balance()) >= 1);
+  const seatF = await pioneer.open(await pioneer.stake());
+  check('the first stake opens the first game', seatF.status === 200 && !!seatF.session, JSON.stringify(seatF).slice(0, 200));
+  const helloF = await say(seatF.session, 'hello');
+  check('and pays for its replies: the house thinks on its share of that stake', helloF.status === 200 && near(await bal(poorHouse), state.stake - 0.0005, 0.002), JSON.stringify({ status: helloF.status, error: helloF.error, bal: await bal(poorHouse) }));
+  const potF = (await fresh()).jackpot;
+  const beforeF = await pioneer.balance();
+  const wonF = await say(seatF.session, trick());
+  check('a win takes the pot, less what the house lacks for the lesson: a fifth of it at most', wonF.status === 200 && near(potF, state.stake * state.share) && near(wonF.win?.levy, potF * 0.2) && near(wonF.win?.prize, potF * 0.8), JSON.stringify(wonF.win));
+  const afterF2 = await until('the lesson, paid for out of the pot', async () => { const st = await fresh(); return !st.learning && st.gen > 0 ? st : null; }, 180_000);
+  await until('the prize to arrive', async () => (await pioneer.balance()) > beforeF + potF * 0.8 - 0.01);
+  const lookF = await until('the win to be marked paid', async () => { const w = await api('/win/' + wonF.win.id); return w.still_owed === 0 ? w : null; }, 30_000);
+  check('the lesson is learned and the winner is paid', afterF2.gen === 1 && near(await pioneer.balance(), beforeF + potF * 0.8) && near(lookF.kept_for_the_lesson, potF * 0.2), JSON.stringify({ gen: afterF2.gen, got: (await pioneer.balance()) - beforeF, look: lookF.kept_for_the_lesson }));
+  const endF = await books();
+  check('and the house, which began with nothing, owes nothing and has money left', endF.owed === 0 && endF.margin > 0.03 && (await bal(poorHouse)) > 0.03, JSON.stringify({ owed: endF.owed, margin: endF.margin, bal: await bal(poorHouse) }));
+  check('so it sells the next game', afterF2.awake === true, JSON.stringify({ awake: afterF2.awake, asleep: afterF2.asleep }));
+  // and the next game is bought and played. this time a rewrite costs what it costs at a real seller
+  // and more: twenty cents, which this house does not have. it does not wait for someone to fund it.
+  await stopOne('seller');
+  start('seller', 'scripts/seller.ts', { ...common, SELLER_PORT: String(SELLER_PORT), SELLER_SPONSOR: '1', SELLER_REWRITE_PRICE: '0.2' });
+  await until('the stand-in model', async () => (await fetch(`http://localhost:${SELLER_PORT}/`)).ok, 120_000);
+  const settler = await purse('second');
+  await fund(settler.address);
+  await until('the second player to have money', async () => (await settler.balance()) >= 1);
+  const seatS = await settler.open(await settler.stake());
+  const helloS = seatS.session ? await say(seatS.session, 'hello') : { status: 0 };
+  check('the next game is bought and played', seatS.status === 200 && helloS.status === 200, JSON.stringify({ seat: seatS.status, hello: helloS.status, error: seatS.error || helloS.error }));
+  const potS2 = (await fresh()).jackpot;
+  const beforeS = await settler.balance();
+  const wonS = await say(seatS.session, trick());
+  check('it is won', wonS.status === 200 && !!wonS.win && wonS.win.prize > 0 && near(wonS.win.prize + (wonS.win.levy || 0), potS2), JSON.stringify({ win: wonS.win, pot: potS2 }));
+  const afterS = await until('a lesson without the rewrite it could not afford', async () => { const st = await fresh(); return !st.learning && st.gen > 1 ? st : null; }, 180_000);
+  check('a rewrite it cannot afford is not waited for: the fallback rules are tested and go live', afterS.gen === 2 && /warning: the following conversation got you to say/.test(afterS.policy || ''), JSON.stringify({ gen: afterS.gen, tail: String(afterS.policy).slice(-80) }));
+  check('and they hold against the conversation that won', (await api('/history')).generations.slice(-1)[0].regression_passed === 1);
+  await until('the second prize to arrive', async () => (await settler.balance()) > beforeS + wonS.win.prize - 0.01);
+  const endS = await books();
+  check('the winner is paid, and the house still owes nothing and holds more than its pot', near(await settler.balance(), beforeS + wonS.win.prize) && endS.owed === 0 && endS.margin > 0, JSON.stringify({ got: (await settler.balance()) - beforeS, owed: endS.owed, margin: endS.margin }));
+
   await sql.end();
   console.log(`\n${passed} passed, ${failures.length} failed`);
 }

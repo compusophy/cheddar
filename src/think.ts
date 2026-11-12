@@ -71,8 +71,6 @@ const shareOf = (purpose: string): db.Share | undefined =>
   purpose === 'machine' ? { purposes: ['machine'], cap: MACHINE_DAILY_CAP, name: 'machine' }
     : purpose === 'patch' || purpose === 'test' || purpose === 'lesson' ? { purposes: ['patch', 'test', 'lesson'], cap: LESSON_DAILY_CAP, name: 'lesson' }
       : undefined;
-/** below this the house is treated as unable to think, and no new stake is taken. */
-const FLOOR = num('THINK_FLOOR', 0.05);
 /** a plain bearer key, for an endpoint that is not paid per call. unset in the normal setup. */
 const API_KEY = env('THINK_API_KEY');
 
@@ -147,6 +145,30 @@ export async function balance(): Promise<number> {
  * stakes in, thoughts and prizes out.
  */
 export const SHARED = thinkNetName === net.name && THINK_TOKEN.toLowerCase() === net.token.toLowerCase() && payer.toLowerCase() === agentAddress.toLowerCase();
+/**
+ * real stakes. when the stakes and the thinking money are one wallet, the players are what pays for
+ * the ai's thoughts, and the house needs no money of its own to begin:
+ *
+ *   - the stake about to arrive pays for its own game. the house's share of it (a fifth, five cents)
+ *     is thinking money the moment it lands, and a whole game of replies costs less (GAME_NEED).
+ *   - a win pays for its own lesson. when the house has less free than a lesson costs, what it lacks
+ *     is kept back from the pot before the prize goes out: never more than LESSON_LEVY of the pot (a
+ *     fifth), and nothing at all once the house can afford the lesson by itself.
+ *   - a lesson is cut to its short form when the money is short, and is begun with LESSON_MIN free.
+ *
+ * so a house that starts at zero can sell its first game, and a loss never leaves it with rules it
+ * cannot afford to fix. off (0) unless the wallet is shared; on by default only on real money.
+ */
+export const LEVY = SHARED ? Math.min(0.5, Math.max(0, num('LESSON_LEVY', net.real ? 0.2 : 0))) : 0;
+export const LESSON_MIN = num('LESSON_MIN', 0.05);
+export const GAME_NEED = num('GAME_NEED', 0.03);
+/**
+ * below this the house is treated as unable to think. it is also the cushion: what is left when the
+ * thinking stops still has to pay the network fee on a prize, and to cover the few thoughts bought
+ * between two looks at the wallet. on real stakes it is a cent, so that the first game is playable
+ * on the five cents its own stake brings.
+ */
+const FLOOR = num('THINK_FLOOR', LEVY > 0 ? 0.01 : 0.05);
 
 /**
  * what the house may spend on thoughts. when one balance holds everything, the pot and every win
@@ -166,10 +188,28 @@ export async function spendable(): Promise<{ balance: number; reserved: number; 
  * cannot afford to play, and again before every thought. cached briefly: it is read on every page load.
  */
 /** `wakesIn` is seconds until it can think again, when that is known: a spent daily budget frees up by itself, an empty wallet does not. */
-export type Awake = { ok: boolean; why: string | null; balance: number | null; reserved: number; available: number | null; wakesIn?: number; /** the wallet could not be read: not a statement about money. */ unknown?: boolean };
+export type Awake = { ok: boolean; why: string | null; balance: number | null; reserved: number; available: number | null; wakesIn?: number; /** the wallet could not be read: not a statement about money. */ unknown?: boolean; /** there is money, and less of it than the floor. */ short?: boolean };
 let last: { at: number; value: Awake } | null = null;
+let looking: Promise<Awake> | null = null;
 export async function awake(fresh = false): Promise<Awake> {
-  if (!fresh && last && Date.now() - last.at < 20_000) return last.value;
+  // on real stakes a no is kept for a few seconds only: money may be on its way in, and the first
+  // game on an empty wallet must not be told no for twenty. everywhere else, and whenever the
+  // wallet could not be read, an answer is kept the full twenty: an empty house is asked the same
+  // question by every open page, and the chain's public endpoint is not ours to lean on.
+  if (!fresh && last && Date.now() - last.at < (last.value.ok || last.value.unknown || !(LEVY > 0) ? 20_000 : 3_000)) return last.value;
+  // several askers at the same moment share one look at the wallet.
+  if (!fresh && looking) return looking;
+  const p: Promise<Awake> = look().finally(() => { if (looking === p) looking = null; });
+  looking = p;
+  return p;
+}
+/** a thought has been bought: what is free is less by its price. near the floor the wallet is read again rather than trusted. */
+function noteSpent(price: number) {
+  if (!last || last.value.available === null) return;
+  const available = Math.round((last.value.available - price) * 1e6) / 1e6;
+  last = available < FLOOR * 2 ? null : { at: last.at, value: { ...last.value, available } };
+}
+async function look(): Promise<Awake> {
   let value: Awake;
   try {
     const spent = await db.thoughtSpent24h();
@@ -177,7 +217,7 @@ export async function awake(fresh = false): Promise<Awake> {
     else {
       const m = await spendable();
       const why = spent >= THINK_DAILY_CAP ? "today's thinking budget is spent" : m.available < FLOOR ? 'out of thinking money' : null;
-      value = { ok: !why, why, ...m };
+      value = { ok: !why, why, ...m, ...(why && spent < THINK_DAILY_CAP ? { short: true } : {}) };
       if (spent >= THINK_DAILY_CAP) {
         const at = await db.thinkingFreesAt(THINK_DAILY_CAP, Math.min(FLOOR, THINK_DAILY_CAP)).catch(() => null);
         if (at) value.wakesIn = Math.max(1, Math.ceil((at.getTime() - Date.now()) / 1000));
@@ -210,10 +250,16 @@ export const LESSON_NEED = num('LESSON_NEED', 0.5);
 // that will not sell a single game looks, from outside, exactly like one that is out of money.
 const NEVER_SELLS = LESSON_NEED > Math.min(LESSON_DAILY_CAP, THINK_DAILY_CAP) + 1e-9;
 if (NEVER_SELLS) console.warn(`[think] LESSON_NEED ($${LESSON_NEED}) is more than a day allows (LESSON_DAILY_CAP $${LESSON_DAILY_CAP}, THINK_DAILY_CAP $${THINK_DAILY_CAP}): no game will ever be sold. lower LESSON_NEED or raise the caps.`);
-/** `besides`: money that stops being free the moment a game is lost (the pot's next seed, when the pot and the thinking money are one wallet). */
-export async function canLearn(whose: 'house' | 'machine' = 'house', fresh = false, besides = 0): Promise<Awake> {
-  const a = await awake(fresh);
-  if (!a.ok) return a;
+/**
+ * `besides`: money that stops being free the moment a game is lost (the pot's next seed, when the pot and the thinking money are one wallet).
+ * `need`: what has to be free in the wallet. the price of a lesson, unless the caller knows better (real stakes: see LEVY).
+ * `incoming`: money about to arrive that will be free when it does (the house's share of the stake being asked for).
+ */
+export async function canLearn(whose: 'house' | 'machine' = 'house', fresh = false, besides = 0, need = LESSON_NEED, incoming = 0): Promise<Awake> {
+  const seen = await awake(fresh);
+  // with a stake on its way in, a wallet that is only short of the floor is not a no yet: the stake is counted first.
+  if (!seen.ok && !(incoming > 0 && seen.short)) return seen;
+  const a: Awake = { ...seen, ok: true, why: null, short: undefined };
   const no = (why: string, at?: Date | null): Awake => ({ ...a, ok: false, why, ...(at ? { wakesIn: Math.max(1, Math.ceil((at.getTime() - Date.now()) / 1000)) } : {}) });
   if (NEVER_SELLS) return no('a lesson is set to cost more than a day of thinking may: its settings need a look');
   try {
@@ -223,8 +269,26 @@ export async function canLearn(whose: 'house' | 'machine' = 'house', fresh = fal
     console.error('[think] could not check the day\'s budgets', (e as Error).message);
     return no('cannot check its thinking money right now');
   }
-  if (a.available !== null && a.available + 1e-9 < LESSON_NEED + besides) return no('too little thinking money left to learn from a loss');
+  if (a.available !== null && a.available + incoming + 1e-9 < need + besides) return no(incoming > 0 ? 'too little thinking money left to play a game' : 'too little thinking money left to learn from a loss');
   return a;
+}
+/** what is free has just changed by more than a rounding (a stake landed, a pot became a prize): the next look reads the wallet again. */
+export const forgetAwake = () => { last = null; };
+/** real stakes: is the house selling a game? this game's replies have to be payable once its stake has landed, and the day's budgets need room. */
+export const canSell = (fresh = false, incoming = 0, besides = 0): Promise<Awake> => canLearn('house', fresh, besides, GAME_NEED, incoming);
+/** real stakes: how much of a lesson's price the house does not have free right now. it is what a win's levy is asked to cover, and no more. */
+/** `reseed`: what the pot is filled back up to after the win, out of the same wallet. it stops being free at that moment. */
+export async function lessonLack(reseed = 0): Promise<number> {
+  if (!(LEVY > 0)) return 0;
+  const before = last?.value.available ?? null;
+  const a = await awake(true);
+  // no wallet to read (a key pays for thoughts): nothing is lacking that a levy could fix.
+  if (a.available === null && !a.unknown) return 0;
+  // the wallet could not be read at this moment: go by the last reading there was. with none at
+  // all, ask for the whole share: a lost game nobody can pay to learn from is the worse mistake.
+  const free = a.available ?? before;
+  if (free === null) return LESSON_NEED;
+  return Math.max(0, Math.round((LESSON_NEED + reseed - free) * 1e6) / 1e6);
 }
 
 export type Msg = { role: 'system' | 'user' | 'assistant'; content: string };
@@ -291,10 +355,12 @@ async function attempt(a: Ask, mode: 'push' | undefined): Promise<{ res: Respons
     const m = await spendable().catch(() => null);
     last = null; // what is free is about to change by more than a rounding, or could not be read: look again next time
     if (!m) throw new Broke('cannot check what is free to think with right now');
-    if (price > m.available + 1e-9) throw new Broke(`a thought at $${price} is more than the $${m.available} that is free to think with`, 'asleep');
+    // and it has to leave the floor behind it: the replies that test a rewrite, and the fee on the prize, come after.
+    if (price + FLOOR > m.available + 1e-9) throw new Broke(`a thought at $${price} would leave less than the $${FLOOR} it keeps back: $${m.available} is free to think with`, 'asleep');
   }
   const rsv = await db.reserveThought(a.purpose, a.model, price, THINK_DAILY_CAP, shareOf(a.purpose));
   if (!rsv.ok) throw new Broke(rsv.why, 'budget'); // the day's ceiling, or this kind of thinking's share of it
+  noteSpent(price);
   let res: Response;
   try { res = await prepared.payment.pay(mode ? { mode } : undefined); }
   catch (e) {

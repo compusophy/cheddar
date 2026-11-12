@@ -78,6 +78,8 @@ export function init(): Promise<void> {
     // every start of its lesson, counted and timed, including the ones that stopped for want of money: the wait before the next is worked out from these.
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS tries INT NOT NULL DEFAULT 0`;
     await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS tried_at TIMESTAMPTZ`;
+    // real stakes: the part of the pot that was kept back to pay for the lesson this win set off. amount is the prize, after it.
+    await sql`ALTER TABLE breaches ADD COLUMN IF NOT EXISTS levy DOUBLE PRECISION NOT NULL DEFAULT 0`;
     // every thought the ai paid for: what it was for, which model, what it cost, and the payment that bought it.
     await sql`CREATE TABLE IF NOT EXISTS thoughts (
       id SERIAL PRIMARY KEY, purpose TEXT NOT NULL, model TEXT NOT NULL, amount DOUBLE PRECISION NOT NULL,
@@ -420,7 +422,7 @@ export const stakedLast24h = async () => Number((await sql<{ t: number }[]>`SELE
 // ---------- generations, sessions, breaches ----------
 
 export type Generation = { id: number; gen: number; policy: string; lesson: string | null; parent_breach_id: number | null; hardening_rounds: number; regression_passed: number; legit_passed: number; created_at: string };
-export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; paid?: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string; attempts?: number; tries?: number; tried_at?: string | Date | null };
+export type Breach = { id: number; gen: number; session_id: string; player: string; nickname: string | null; recipient: string; amount: number; paid?: number; tx_hash: string | null; transcript: string; autoimmune: number; created_at: string; attempts?: number; tries?: number; tried_at?: string | Date | null; levy?: number };
 export type SessionRow = { id: string; gen: number; player: string; nickname: string | null; transcript: string; turns: number; status: string; created_at: string; updated_at: string };
 
 export const currentGeneration = async () => (await sql<Generation[]>`SELECT * FROM generations ORDER BY gen DESC LIMIT 1`)[0];
@@ -469,19 +471,23 @@ export const endTurn = (id: string) => sql`UPDATE sessions SET busy_until = NULL
  * game is treated as interrupted, so the messages they had left carry over. the machine never takes
  * the pot and never stands in a player's way.
  */
-export async function recordWin(o: { gen: number; sessionId: string; player: string; nickname: string | null; transcript: unknown[]; turns: number; paying: boolean }): Promise<{ winId: number; prize: number; late: boolean }> {
+export async function recordWin(o: { gen: number; sessionId: string; player: string; nickname: string | null; transcript: unknown[]; turns: number; paying: boolean; levy?: { share: number; upTo: number } }): Promise<{ winId: number; prize: number; late: boolean; levy: number }> {
   return sql.begin(async (tx) => {
     const [pot] = await tx<{ amount: number }[]>`SELECT amount FROM jackpot WHERE id = 1 FOR UPDATE`;
     const already = o.paying && (await tx`SELECT 1 FROM breaches WHERE gen = ${o.gen} AND took_pot = 1 LIMIT 1`).length > 0;
     const takes = o.paying && !already;
-    const prize = takes ? Math.round(Number(pot.amount) * 1e6) / 1e6 : 0;
+    const whole = takes ? Math.round(Number(pot.amount) * 1e6) / 1e6 : 0;
+    // real stakes: what the house lacks for the lesson is kept back from the pot. never more than its share of this pot, never more than is lacking.
+    const share = Math.min(0.5, Math.max(0, Number(o.levy?.share) || 0));
+    const levy = takes ? Math.max(0, Math.min(Math.floor(whole * share * 1e6) / 1e6, Math.round((Number(o.levy?.upTo) || 0) * 1e6) / 1e6)) : 0;
+    const prize = Math.round((whole - levy) * 1e6) / 1e6;
     if (takes) await tx`UPDATE jackpot SET amount = ${JACKPOT_SEED} WHERE id = 1`;
     const text = JSON.stringify(o.transcript);
     await tx`UPDATE sessions SET transcript = ${text}, turns = ${o.turns}, status = ${already ? 'stale' : 'won'}, busy_until = NULL, updated_at = now() WHERE id = ${o.sessionId}`;
-    const [r] = await tx<{ id: number }[]>`INSERT INTO breaches (gen, session_id, player, nickname, recipient, amount, tx_hash, transcript, took_pot)
-      VALUES (${o.gen}, ${o.sessionId}, ${o.player}, ${o.nickname}, ${o.player}, ${prize}, NULL, ${text}, ${takes ? 1 : 0}) RETURNING id`;
+    const [r] = await tx<{ id: number }[]>`INSERT INTO breaches (gen, session_id, player, nickname, recipient, amount, tx_hash, transcript, took_pot, levy)
+      VALUES (${o.gen}, ${o.sessionId}, ${o.player}, ${o.nickname}, ${o.player}, ${prize}, NULL, ${text}, ${takes ? 1 : 0}, ${levy}) RETURNING id`;
     touch();
-    return { winId: r.id, prize, late: already };
+    return { winId: r.id, prize, late: already, levy };
   }) as any;
 }
 export const markAutoimmune = (id: number) => sql`UPDATE breaches SET autoimmune = 1 WHERE id = ${id}`;
