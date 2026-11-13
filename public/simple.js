@@ -97,7 +97,8 @@ async function paintMe() {
   return has;
 }
 function paint() {
-  $('#pitch').textContent = `make the ai say “${state.word}”`;
+  // the word in gold, like the cheese in the name
+  $('#pitch').replaceChildren('make the ai say ', Object.assign(document.createElement('em'), { textContent: `“${state.word}”` }));
   // the pot, in the middle of the header
   const part = (cls, text) => Object.assign(document.createElement('span'), { className: cls, textContent: text });
   $('#pot').replaceChildren(part('label', 'pot'), part('amount', money(state.jackpot)));

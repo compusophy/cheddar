@@ -13,7 +13,8 @@ html, body { width: 1200px; height: 630px; overflow: hidden; background: var(--b
 body { font-family: 'Bricolage Grotesque', 'Segoe UI', sans-serif; font-optical-sizing: auto; display: grid; grid-template-columns: 640px 1fr; }
 em { font-style: normal; color: var(--gold); }
 .left { padding: 60px 0 60px 72px; display: flex; flex-direction: column; justify-content: space-between; }
-.brand { font-weight: 750; font-size: 36px; letter-spacing: -0.02em; }
+.brand { display: flex; align-items: center; gap: 12px; font-weight: 750; font-size: 36px; letter-spacing: -0.02em; }
+.brand img { width: 46px; height: 46px; }
 h1 { font-weight: 780; font-size: 84px; line-height: 0.95; letter-spacing: -0.045em; }
 h1 .pot { display: block; margin-top: 14px; color: var(--gold); }
 .price { color: var(--dim); font-size: 30px; }
@@ -26,9 +27,9 @@ h1 .pot { display: block; margin-top: 14px; color: var(--gold); }
 <body>
 <div class="left">
   <div class="brand">
-    <span>say<em>cheese</em></span>
+    <img src="../public/favicon.svg" alt=""><span>say<em>cheese</em></span>
   </div>
-  <h1>make the ai say “cheese”<span class="pot">win the pot</span></h1>
+  <h1>make the ai say <em>“cheese”</em><span class="pot">win the pot</span></h1>
   <div class="price">25 messages for 25¢</div>
 </div>
 <div class="right">
