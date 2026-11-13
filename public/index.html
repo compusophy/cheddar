@@ -5,36 +5,42 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0b0b0c">
 <title>say cheese</title>
-<meta name="description" content="make the ai say the word. win the pot.">
+<meta name="description" content="make the ai say cheese and win the pot">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <!-- what a shared link shows. the addresses must be absolute: change them if the site moves. -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="say cheese">
-<meta property="og:title" content="make the ai say “cheese”.">
-<meta property="og:description" content="win the pot. 25 messages for 25¢.">
+<meta property="og:title" content="make the ai say “cheese”">
+<meta property="og:description" content="win the pot · 25 messages for 25¢">
 <meta property="og:url" content="https://cheddar-one.vercel.app/">
 <meta property="og:image" content="https://cheddar-one.vercel.app/card.png?v=2">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="say cheese: make the ai say cheese. win the pot. 25 messages for 25 cents.">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="make the ai say “cheese”.">
-<meta name="twitter:description" content="win the pot. 25 messages for 25¢.">
+<meta name="twitter:title" content="make the ai say “cheese”">
+<meta name="twitter:description" content="win the pot · 25 messages for 25¢">
 <meta name="twitter:image" content="https://cheddar-one.vercel.app/card.png?v=2">
 <link rel="stylesheet" href="/simple.css">
 <!-- the wallet's code is big. it starts downloading now, so it is ready by the first tap. -->
 <link rel="preload" href="/vendor/tempo-wallet.js" as="script">
 </head>
 <body>
+<div class="app">
 <header>
   <b class="brand" aria-label="say cheese">say<em>cheese</em></b>
   <button id="me" type="button">sign in</button>
 </header>
 <main>
-  <h1 id="pitch">make the ai say “cheese”.</h1>
-  <p id="pot" class="pot"></p>
+  <section class="hero">
+    <img class="cheese" src="/favicon.svg" alt="" width="88" height="88">
+    <h1 id="pitch">make the ai say “cheese”</h1>
+    <p id="pot" class="pot"></p>
+  </section>
   <div id="thread" aria-live="polite"></div>
+</main>
+<div class="dock">
   <p id="said" class="said" role="status" aria-live="polite"></p>
   <form id="form" autocomplete="off">
     <input id="msg" placeholder="say something" maxlength="1000" aria-label="your message">
@@ -42,13 +48,15 @@
   </form>
   <p id="price" class="dim"></p>
   <p id="allow" class="dim hidden"><span id="allowtext"></span><span id="stopper"> · <button id="stop" type="button" class="link">stop</button></span></p>
+</div>
+<footer>
   <details>
     <summary>how it works</summary>
-    <p id="how"></p>
-    <p><a href="/classic.html">its rules and every past win</a></p>
-    <p><button id="out" type="button" class="link hidden">sign out</button></p>
+    <ul id="how"></ul>
+    <p class="more"><a href="/classic.html">its rules and every past win</a><span id="outer" class="hidden"> · <button id="out" type="button" class="link">sign out</button></span></p>
   </details>
-</main>
+</footer>
+</div>
 <script src="/simple.js"></script>
 </body>
 </html>
