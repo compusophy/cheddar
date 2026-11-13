@@ -48,7 +48,7 @@ async function walletNow() {
   const began = Date.now();
   say('one moment…');
   const w = await wallet();
-  if (Date.now() - began > 800) throw Object.assign(new Error('ready now. tap again.'), { keep: true });
+  if (Date.now() - began > 400) throw Object.assign(new Error('ready now. tap again.'), { keep: true });
   return w;
 }
 const say = (text) => { $('#said').textContent = text || ''; };
@@ -74,8 +74,14 @@ const needsAllowance = () => allow === null || (!!allow && allow.left < state.st
 /** ask the wallet for a new allowance. it opens, so this is the first thing a tap does. */
 async function approve() {
   say(`approve up to $${ALLOWANCE} in your wallet…`);
-  await step('approve', async () => (await walletNow()).renew(where(), me));
+  await step('approve', async () => (await walletNow()).renew(where(), me)).catch(outOfWallet);
   await paintAllow();
+}
+/** signed out on the wallet's side (or its storage was cleared): this page signs out too, and the next tap signs in. */
+function outOfWallet(e) {
+  if (!(e && e.signedOut)) throw e;
+  me = null; allow = undefined; store.set('me', null); paintMe();
+  throw Object.assign(new Error('tap send again to sign in.'), { keep: true });
 }
 async function paintMe() {
   $('#out').classList.toggle('hidden', !me);
@@ -138,7 +144,8 @@ async function ensureGame() {
   if (state.awake === false) throw Object.assign(new Error('it is asleep right now. try again later.'), { keep: true });
   say(me ? 'one moment…' : 'signing in…');
   if (!me) await signIn();
-  else if (needsAllowance()) await approve();
+  // (a round already paid for, whose answer was lost, is picked up with its proof: no new allowance for that.)
+  else if (needsAllowance() && !store.get('paid')) await approve();
   const w = await wallet();
   // a cent over the price: the wallet pays a small network fee on top.
   const need = state.stake + 0.01;
@@ -150,6 +157,7 @@ async function ensureGame() {
   const res = await step('start a game', () => w.pay({ ...where(), account: me, token: state.token, most: String(state.stake), kept: store.get('paid'), keep: (proof) => store.set('paid', proof) },
     '/api/agent/play', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).catch(async (e) => {
     // nothing was paid. the wallet can open only straight after a tap, so the next tap asks it first.
+    if (e && e.signedOut) outOfWallet(e);
     if (e && e.renew) { await paintAllow(); allow = null; throw Object.assign(new Error(`tap send again: your wallet will ask you to approve up to $${ALLOWANCE} for messages.`), { keep: true }); }
     throw e;
   });
@@ -225,7 +233,7 @@ $('#me').onclick = async () => {
 $('#stop').onclick = async () => {
   if (working || !me) return;
   busy(true);
-  try { say('ending it…'); await step('stop', async () => (await walletNow()).stop(where(), me)); say(`stopped. nothing more can be taken without asking you.`); }
+  try { say('ending it…'); const ended = await step('stop', async () => (await walletNow()).stop(where(), me)); say(ended ? 'stopped. nothing more can be taken without asking you.' : 'there was nothing to stop. nothing can be taken without asking you.'); }
   catch (e) { say(plain(e)); }
   await paintAllow();
   busy(false);
@@ -248,6 +256,8 @@ $('#out').onclick = async () => {
       await w.warm(where());
       const known = await w.known(where());
       if (known && known !== me && !working) { me = known; store.set('me', me); paintMe(); }
+      // the wallet says nobody is signed in here (it was signed out on its own site, or its storage was cleared).
+      else if (known === null && me && !working) { me = null; store.set('me', null); paintMe(); }
       else paintAllow();
     } catch { /* it is asked for again at the first tap, and says then what went wrong */ }
   }, 300);

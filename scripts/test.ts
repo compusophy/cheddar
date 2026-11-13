@@ -277,14 +277,19 @@ async function main() {
   // it is pinned: rebuild it (npm run build in web/), read what changed, and only then move this hash.
   const walletLib = fs.readFileSync(path.join(process.cwd(), 'public', 'vendor', 'tempo-wallet.js'));
   const walletHash = crypto.createHash('sha384').update(walletLib).digest('base64');
-  check('the wallet bundle is the one that was built and read', walletHash === 'W/EMkgtrBMzn9CuwagyGij5RPwbm98wDsCJ7mnYpTOIDjDYeRe1Ke/9Ms+OJb+CA', walletHash);
+  check('the wallet bundle is the one that was built and read', walletHash === 'DkDSYFHnbPbIafWW6mNbRIMYrveTmjk9EMK4qwSCQhz2skUOm/EH0LR/xCfuaDw7', walletHash);
   // the $5 allowance runs out (its network fees count against it too), ends after a week, or is stopped.
   // the wallet then has to be asked for a new one, and it can open only straight after a tap: so the
   // tap asks it first, and a payment that finds none left says "tap again" instead of failing for ever.
   const walletText = walletLib.toString('utf8');
   check('the wallet bundle can ask for a new allowance and knows a spent one when the chain refuses it', walletText.includes('wallet_authorizeAccessKey') && walletText.includes('SpendingLimit'));
   const simpleJs = fs.readFileSync(path.join(process.cwd(), 'public', 'simple.js'), 'utf8');
-  const askFirst = simpleJs.indexOf('else if (needsAllowance()) await approve();');
+  const walletSrc = fs.readFileSync(path.join(process.cwd(), 'web', 'wallet.ts'), 'utf8');
+  check('a round is paid by the allowance\'s own key or not at all, never by the account behind it', walletSrc.includes('getMppxParameters(key ? { accessKey: key'));
+  const renewSrc = walletSrc.slice(walletSrc.indexOf('async renew('), walletSrc.indexOf('async stop('));
+  check('the old allowance is forgotten only after the wallet has given a new one', renewSrc.indexOf('wallet_authorizeAccessKey') > 0 && renewSrc.indexOf('wallet_authorizeAccessKey') < renewSrc.indexOf('accessKeys.remove'));
+  // (unless a round already paid for, whose answer was lost, can be picked up with its proof.)
+  const askFirst = simpleJs.indexOf("else if (needsAllowance() && !store.get('paid')) await approve();");
   check('a tap with no allowance left asks the wallet before anything else, then pays', askFirst > 0 && askFirst < simpleJs.indexOf('w.pay('));
   // the wallet's code is big: it is fetched as the page loads, and a tap that came before it was ready
   // is not used to open the wallet's window late (a phone blocks that); the next tap opens it.

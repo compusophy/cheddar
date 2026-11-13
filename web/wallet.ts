@@ -67,16 +67,31 @@ function ourKeys(o: Where, account: string): any[] {
 }
 /** the allowance this page asked for, if this browser holds one that is still in date. */
 const heldKey = (o: Where, account: string): any | null => ourKeys(o, account).find((k) => !k.expiry || k.expiry * 1000 > Date.now()) ?? null;
-/** what is left of an allowance, as the chain counts it. a key not used yet has all of it. null: could not be read just now. */
-async function leftOf(o: Where, account: string, k: any): Promise<{ left: bigint; total: bigint } | null> {
+/**
+ * what is left of an allowance, as the chain counts it. a key not used yet ("pending": its permission
+ * still rides with it) has all of it. `gone`: ended, from here or from the wallet's own site, or over.
+ * null: could not be read just now.
+ */
+async function leftOf(o: Where, account: string, k: any): Promise<{ left: bigint; total: bigint; gone?: true } | null> {
   const total: bigint = k.limits.find((l: any) => same(l.token, o.allow!.token)).limit;
   try {
     const p: any = provider(o);
-    if ((await p.getAccessKeyStatus({ address: account, accessKey: k.address, chainId: o.chainId })) !== 'published') return { left: total, total };
+    // the sdk reads its own record of the key only for a call the key may make: a payment to the game.
+    // asked without one, a key not used yet looks the same as one that was ended.
+    const a = o.allow!;
+    const call = { to: a.token, data: `${TRANSFER}${a.to.slice(2).toLowerCase().padStart(64, '0')}${'0'.repeat(64)}` };
+    const status = await p.getAccessKeyStatus({ address: account, accessKey: k.address, chainId: o.chainId, calls: [call] });
+    if (status === 'pending') return { left: total, total };
+    if (status !== 'published') return { left: 0n, total, gone: true };
     const { remaining } = await Actions.accessKey.getRemainingLimit(p.getClient({ chainId: o.chainId }), { account: account as `0x${string}`, accessKey: k.address, token: o.allow!.token as `0x${string}` });
     return { left: remaining, total };
   } catch { return null; }
 }
+/** the sdk keeps its accounts and keys in the browser's storage, which loads after the page does. */
+const loaded = async (o: Where) => { try { await (provider(o) as any).ready?.(); } catch { /* read as it is */ } };
+/** the wallet has no account here any more (signed out on the wallet's side, or its storage was cleared). */
+const signedOut = () => Object.assign(new Error('signed out of the wallet'), { signedOut: true });
+const hasAccount = (o: Where) => ((provider(o) as any).store?.getState?.().accounts?.length ?? 0) > 0;
 const first = (r: any): string | null => {
   const a = Array.isArray(r) ? r[0] : r?.accounts?.[0];
   const address = typeof a === 'string' ? a : a?.address;
@@ -91,9 +106,9 @@ const api = {
   async warm(o: Where): Promise<void> {
     try { await (provider(o) as any).ready?.(); } catch { /* it will say so when it is asked for something */ }
   },
-  /** the account already signed in here, if there is one. asks nobody anything. */
-  async known(o: Where): Promise<string | null> {
-    try { return first(await provider(o).request({ method: 'eth_accounts' } as any)); } catch { return null; }
+  /** the account already signed in here: null if there is none, undefined if that could not be told just now. asks nobody anything. */
+  async known(o: Where): Promise<string | null | undefined> {
+    try { return first(await provider(o).request({ method: 'eth_accounts' } as any)); } catch { return undefined; }
   },
   /** sign in: the wallet opens and asks which account to use. resolves with its address. */
   async connect(o: Where): Promise<string> {
@@ -109,28 +124,38 @@ const api = {
    * payment will ask the wallet. a key that has not been used yet has all of it left.
    */
   async allowance(o: Where, account: string): Promise<{ left: number; total: number; until: number } | null> {
+    await loaded(o);
     const k = heldKey(o, account);
     if (!k) return null;
     const n = await leftOf(o, account, k);
     if (!n) throw new Error('the allowance could not be read just now');
+    if (n.gone) return null;
     return { left: Number(formatUnits(n.left, 6)), total: Number(formatUnits(n.total, 6)), until: Number(k.expiry || 0) };
   },
   /**
    * ask the wallet for a new allowance, the same as the one given at sign-in: the old one is used up,
-   * over, or was ended. the wallet opens, so this is called straight after a tap. the old one is
-   * forgotten here first, or it would still be picked to pay with.
+   * over, or was ended. the wallet opens, so this is called straight after a tap. the old ones are
+   * forgotten here only once the new one is given: closing the wallet leaves things as they were.
    */
   async renew(o: Where, account: string): Promise<void> {
     if (!o.allow) return;
+    await loaded(o);
+    if (!hasAccount(o)) throw signedOut();
     const p: any = provider(o);
-    for (const k of ourKeys(o, account)) p.store.accessKeys.remove({ accessKey: k.address, account: k.access ?? account, chainId: o.chainId });
+    const old = ourKeys(o, account).map((k) => ({ accessKey: k.address, account: k.access ?? account, chainId: o.chainId }));
     await p.request({ method: 'wallet_authorizeAccessKey', params: [terms(o.allow)] });
+    for (const k of old) p.store.accessKeys.remove(k);
   },
-  /** end the allowance now. the wallet asks the person to confirm. afterwards nothing can be taken without asking. */
-  async stop(o: Where, account: string): Promise<void> {
+  /**
+   * end the allowance now. the wallet asks the person to confirm. afterwards nothing can be taken
+   * without asking. false: there was none here to end.
+   */
+  async stop(o: Where, account: string): Promise<boolean> {
+    await loaded(o);
     const k = heldKey(o, account);
-    if (!k) return;
+    if (!k) return false;
     await provider(o).request({ method: 'wallet_revokeAccessKey', params: [{ address: account, accessKeyAddress: k.address, chainId: hex(o.chainId) }] } as any);
+    return true;
   },
   /** sign out of the wallet here. */
   async disconnect(o: Where): Promise<void> {
@@ -174,14 +199,20 @@ const api = {
     if (unpaid.status !== 402) return unpaid;
     // paid from the allowance, never by opening the wallet here: by now the tap that could open it
     // has passed. with none, or not enough left for the price and its fee, the page asks for a new one.
+    let key: string | undefined;
     if (o.allow) {
+      await loaded(o);
+      if (!hasAccount(o)) throw signedOut();
       const k = heldKey(o, o.account);
       if (!k) throw askAgain('there is no allowance to pay from');
       const n = await leftOf(o, o.account, k);
-      if (n && n.left < parseUnits(o.most, 6) + FEE_ROOM) throw askAgain('the allowance is used up');
+      if (n && (n.gone || n.left < parseUnits(o.most, 6) + FEE_ROOM)) throw askAgain('the allowance is used up');
+      key = k.address;
     }
     const client: any = Mppx.create({ polyfill: false, methods: [tempo.charge({
-      ...(provider(o).getMppxParameters() as any),
+      // with `accessKey`, that key pays or nothing does: the payment never falls back to the account
+      // itself, which would open the wallet now, long after the tap, outside the allowance.
+      ...(provider(o).getMppxParameters(key ? { accessKey: key as `0x${string}` } : {}) as any),
       // the wallet sends its own payment and pays its own fee, in the same dollars.
       mode: 'push', allowedChainIds: [o.chainId], currencies: [o.token], feeToken: o.token, decimals: 6, maxAmount: o.most,
     } as any)] } as any);
@@ -190,7 +221,8 @@ const api = {
     try { credential = await payment.createCredential({ mode: 'push' }); }
     catch (e) {
       // the chain refused the allowance (spent, ended): nothing was paid. the page asks for a new one.
-      if (o.allow && /SpendingLimit|KeyExpired|KeyNotFound|KeyAlreadyRevoked/.test(String((e as any)?.message ?? e))) throw askAgain('the allowance is used up');
+      // (or the key could not be used here at all, and the account was not asked instead.)
+      if (o.allow && /SpendingLimit|KeyExpired|KeyNotFound|KeyAlreadyRevoked|cannot sign for account|cannot be selected/.test(String((e as any)?.message ?? e))) throw askAgain('the allowance is used up');
       throw e;
     }
     const paid: RequestInit = payment.setCredential(init, credential);
