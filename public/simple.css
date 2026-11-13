@@ -15,6 +15,9 @@ h1 { margin: 2rem 0 0; font-size: 1.9rem; line-height: 1.15; font-weight: 700; }
 
 button { font: inherit; cursor: pointer; }
 #me { padding: 0.4rem 0.8rem; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--fg); }
+#me.want { border-color: var(--gold); background: var(--gold); color: #000; font-weight: 700; }
+/* the wallet's sdk would set this with an inline style, which this site's policy does not run */
+dialog[data-tempo-wallet-postmessage]::backdrop { background: transparent !important; }
 button.link { padding: 0; border: none; background: none; color: var(--dim); text-decoration: underline; }
 
 #thread { display: flex; flex-direction: column; gap: 0.5rem; }

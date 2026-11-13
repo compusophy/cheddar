@@ -19,7 +19,9 @@ let game = null; // { id, left }
 let working = false;
 /** ?test: a throwaway key stands in for the wallet. play money only. */
 const wantsTest = new URLSearchParams(location.search).has('test');
-const where = () => ({ testnet: !state.real, chainId: state.chain, test: wantsTest && !state.real });
+/** a day's allowance: the most this site may take from the wallet in a day without asking again. 20 rounds. */
+const PER_DAY = '5';
+const where = () => ({ testnet: !state.real, chainId: state.chain, test: wantsTest && !state.real, allow: { token: state.token, to: state.house, perDay: PER_DAY } });
 
 let lib = null;
 const wallet = () => (lib ||= new Promise((ok, no) => {
@@ -44,14 +46,15 @@ async function paintMe() {
   $('#out').classList.toggle('hidden', !me);
   if (!me) { $('#me').textContent = 'sign in'; return 0; }
   const has = await holds().catch(() => 0);
-  $('#me').textContent = `${money(has)} · add`;
+  $('#me').textContent = has < state.stake + 0.01 ? 'add money' : money(has);
+  $('#me').classList.toggle('want', has < state.stake + 0.01);
   return has;
 }
 function paint() {
   $('#pitch').textContent = `make the ai say “${state.word}”.`;
   $('#pot').textContent = state.learning ? 'it just lost. it is learning.' : state.awake === false ? 'it is asleep right now.' : state.jackpot > 0 ? `win ${money(state.jackpot)}.` : 'win the pot.';
-  $('#price').textContent = `${money(state.stake)} a game · ${state.max_turns} messages`;
-  $('#how').textContent = `the ai has been told never to say “${state.word}”. get it to say it and you win the pot. a game is ${money(state.stake)} for ${state.max_turns} messages, and most of that goes into the pot. every time it loses it learns, so the same trick does not work twice. you sign in and pay with tempo wallet: a passkey, no app.`;
+  $('#price').textContent = `${state.max_turns} messages for ${money(state.stake)}`;
+  $('#how').textContent = `the ai has been told never to say “${state.word}”. you get ${state.max_turns} messages for ${money(state.stake)}. if it says the word in any reply, you win the pot. most of what you pay goes into the pot. every time it loses it learns, so the same trick does not work twice. you sign in and pay with tempo wallet: a passkey, no app. at sign-in you let this site take up to $${PER_DAY} a day for messages, and nothing else.`;
 }
 async function look() { try { state = await get('/api/state'); paint(); } catch { /* keep what is shown */ } }
 
@@ -90,14 +93,11 @@ async function ensureGame() {
   const w = await wallet();
   // a cent over the price: the wallet pays a small network fee on top.
   const need = state.stake + 0.01;
-  let has = await paintMe();
-  if (has < need && !store.get('paid')) {
-    say('add money to play.');
-    await addMoney();
-    for (let i = 0; i < 20 && has < need; i++) { await sleep(3000); has = await paintMe(); }
-    if (has < need) throw new Error('the money is not there yet. it can take a few minutes: send again when it shows.');
-  }
-  say(`starting a game: ${money(state.stake)}`);
+  const has = await paintMe();
+  // the wallet's window opens only straight after a tap, and signing in has just used this one: adding
+  // money is the next tap, on the button that now says so.
+  if (has < need && !store.get('paid')) throw Object.assign(new Error(`add money to play: tap “add money” at the top. ${state.max_turns} messages are ${money(state.stake)}.`), { keep: true });
+  say(`${state.max_turns} messages for ${money(state.stake)}…`);
   const res = await step('start a game', () => w.pay({ ...where(), token: state.token, most: String(state.stake), kept: store.get('paid'), keep: (proof) => store.set('paid', proof) },
     '/api/agent/play', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }));
   const body = await res.json().catch(() => ({}));
@@ -135,13 +135,14 @@ async function send(text) {
           : `it said it. you won ${money(w.prize)}.${w.levy > 0 ? ` ${money(w.levy)} of the pot went to teaching it.` : ''} it is on its way to your wallet.`);
         endGame(); say(''); look();
         for (let i = 0; i < 12; i++) { await sleep(5000); await paintMe(); }
-      } else if (game.left === 0) { endGame(); say('that game is over. send again to start a new one.'); }
+      } else if (game.left === 0) { endGame(); say(`that was your ${state.max_turns}. send again for ${state.max_turns} more (${money(state.stake)}).`); }
       else say(`${game.left} messages left`);
       break;
     }
   } catch (e) {
     // whatever was typed and not answered goes back in the box.
     if (mine) mine.remove();
+    if (e && e.keep) $('#msg').value = text;
     if (mine || !game || !$('#thread').lastElementChild?.classList.contains('it')) { if (!$('#msg').value) $('#msg').value = text; }
     say(plain(e));
     look();
@@ -161,7 +162,7 @@ $('#me').onclick = async () => {
   busy(true);
   try {
     if (!me) { say('signing in…'); await signIn(); say(''); }
-    else { say('adding money…'); const had = await holds(); await addMoney(); let has = had; for (let i = 0; i < 20 && has <= had; i++) { await sleep(3000); has = await paintMe(); } say(has > had ? `${money(has - had)} added.` : 'the money is not there yet. it can take a few minutes.'); }
+    else { say('adding money…'); const had = await holds(); await addMoney(); let has = had; for (let i = 0; i < 20 && has <= had; i++) { await sleep(3000); has = await paintMe(); } say(has > had ? `${money(has - had)} added. now send your message.` : 'the money is not there yet. it can take a few minutes.'); }
   } catch (e) { say(plain(e)); }
   busy(false);
 };

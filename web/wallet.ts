@@ -7,19 +7,39 @@
 // so the page can load it from its own origin: the page's content security policy runs scripts from
 // nowhere else. the page never sees a key or a passkey. every prompt is the wallet's own window.
 // built with `npm run build` in this folder; the result is public/vendor/tempo-wallet.js.
-import { Provider, tempoWallet, secp256k1 } from 'accounts';
+import { Provider, tempoWallet, secp256k1, Mount } from 'accounts';
 import { Mppx, tempo } from 'mppx/client';
+import { parseUnits } from 'viem';
 
-/** `test`: a throwaway key kept in this browser stands in for the wallet. play money only; the page refuses it on real money. */
-type Where = { testnet: boolean; chainId: number; test?: boolean };
+/**
+ * `test`: a throwaway key kept in this browser stands in for the wallet. play money only; the page refuses it on real money.
+ * `allow`: at sign-in, the person is asked once to let this site spend up to `perDay` dollars of `token` a day,
+ * paid only to `to`. after that a game is paid without opening the wallet again.
+ */
+type Allow = { token: string; to: string; perDay: string };
+type Where = { testnet: boolean; chainId: number; test?: boolean; allow?: Allow };
+const DAY = 86_400;
 const hex = (n: number) => `0x${n.toString(16)}` as `0x${string}`;
 const isAddress = (a: unknown): a is `0x${string}` => /^0x[0-9a-fA-F]{40}$/.test(String(a));
 
 let made: { key: string; provider: ReturnType<typeof Provider.create> } | null = null;
 function provider(o: Where) {
-  const key = `${o.testnet}:${!!o.test}`;
-  // mpp: false. the sdk can replace the page's fetch so that any 402 is paid without asking; here a payment is made only where the page asks for one (see `pay`).
-  if (!made || made.key !== key) made = { key, provider: Provider.create({ adapter: o.test ? secp256k1() : tempoWallet(), testnet: o.testnet, mpp: false }) };
+  const a = o.test ? undefined : o.allow;
+  const key = `${o.testnet}:${!!o.test}:${a ? `${a.token}:${a.to}:${a.perDay}` : ''}`;
+  if (!made || made.key !== key) made = { key, provider: Provider.create({
+    // the wallet opens as its own window, on its own site. a passkey is then used exactly as it is on
+    // wallet.tempo.xyz itself. inside this page (the sdk's other way) the wallet's server refused it.
+    adapter: o.test ? secp256k1() : tempoWallet({ mount: Mount.popup() }),
+    testnet: o.testnet,
+    // the sdk can replace the page's fetch so that any 402 is paid without asking. it is not asked to:
+    // a payment is made only where the page asks for one (see `pay`).
+    mpp: false,
+    ...(a ? { accessKey: { authorize: {
+      expiry: Math.floor(Date.now() / 1000) + 30 * DAY,
+      limits: [{ token: a.token as `0x${string}`, limit: parseUnits(a.perDay, 6), period: DAY }],
+      scopes: [{ address: a.token as `0x${string}`, recipients: [a.to as `0x${string}`] }],
+    } } } : {}),
+  }) };
   return made.provider;
 }
 const first = (r: any): string | null => {
