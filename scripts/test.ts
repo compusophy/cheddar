@@ -277,7 +277,17 @@ async function main() {
   // it is pinned: rebuild it (npm run build in web/), read what changed, and only then move this hash.
   const walletLib = fs.readFileSync(path.join(process.cwd(), 'public', 'vendor', 'tempo-wallet.js'));
   const walletHash = crypto.createHash('sha384').update(walletLib).digest('base64');
-  check('the wallet bundle is the one that was built and read', walletHash === 'gxSGkclm7w31/jqpdLn2a2D3XPYuEyp3boucEzBjOgNmijafOwU786wWaqCb2LnP', walletHash);
+  check('the wallet bundle is the one that was built and read', walletHash === '0I1VvUDg4lu53Qes0iZ8rsf/P68SZNmyeRAnojHcQBQYa9qLcEVOTBGd8VohKe5E', walletHash);
+  // the $5 allowance runs out (its network fees count against it too), ends after a week, or is stopped.
+  // the wallet then has to be asked for a new one, and it can open only straight after a tap: so the
+  // tap asks it first, and a payment that finds none left says "tap again" instead of failing for ever.
+  const walletText = walletLib.toString('utf8');
+  check('the wallet bundle can ask for a new allowance and knows a spent one when the chain refuses it', walletText.includes('wallet_authorizeAccessKey') && walletText.includes('SpendingLimit'));
+  const simpleJs = fs.readFileSync(path.join(process.cwd(), 'public', 'simple.js'), 'utf8');
+  const askFirst = simpleJs.indexOf('else if (needsAllowance()) await approve();');
+  check('a tap with no allowance left asks the wallet before anything else, then pays', askFirst > 0 && askFirst < simpleJs.indexOf('w.pay('));
+  const renewLine = simpleJs.split('\n').find((l) => l.includes('if (e && e.renew)')) ?? '';
+  check('a payment that finds none left keeps the message and says to tap again', renewLine.includes('allow = null') && renewLine.includes('tap send again') && renewLine.includes('keep: true'), renewLine);
   check('the page frames the wallet and nothing else', /(^|;)\s*frame-src https:\/\/wallet\.tempo\.xyz\s*(;|$)/.test(policy) && !/frame-src[^;]*(\*|'self'|http:)/.test(policy), policy);
   const pageJs = fs.readFileSync(path.join(process.cwd(), 'public', 'app.js'), 'utf8');
   check('and loads its code from here, when asked', /s\.src = '\/vendor\/tempo-wallet\.js'/.test(pageJs) && !/<script[^>]*tempo-wallet/.test(page));

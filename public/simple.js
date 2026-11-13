@@ -16,6 +16,8 @@ const post = async (path, body) => {
 let state = null;
 let me = store.get('me');
 let game = null; // { id, left }
+/** the allowance as last read: undefined, not known yet; null, there is none; else what is left of it. */
+let allow;
 let working = false;
 /** ?test: a throwaway key stands in for the wallet. play money only. */
 const wantsTest = new URLSearchParams(location.search).has('test');
@@ -47,9 +49,19 @@ function busy(on) { working = on; $('#send').disabled = on; $('#msg').disabled =
 const holds = async () => (me ? Number((await get('/api/balance/' + me)).balance) || 0 : 0);
 /** one line: how much of the allowance is left, and a way to end it. */
 async function paintAllow() {
-  const a = me && lib ? await (await wallet()).allowance(where(), me).catch(() => null) : null;
+  const a = allow = me && lib ? await (await wallet()).allowance(where(), me).catch(() => undefined) : undefined;
+  const spent = a && a.left < state.stake + 0.01;
   $('#allow').classList.toggle('hidden', !a);
-  if (a) $('#allowtext').textContent = `${money(a.left)} of your ${money(a.total)} left to play`;
+  $('#stopper').classList.toggle('hidden', !!spent);
+  if (a) $('#allowtext').textContent = spent ? `your ${money(a.total)} is used up. your wallet asks before the next game.` : `${money(a.left)} of your ${money(a.total)} left to play`;
+}
+/** no allowance to pay from, or too little of it: the wallet must be asked for a new one first. */
+const needsAllowance = () => allow === null || (!!allow && allow.left < state.stake + 0.01);
+/** ask the wallet for a new allowance. it opens, so this is the first thing a tap does. */
+async function approve() {
+  say(`approve up to $${ALLOWANCE} in your wallet…`);
+  await step('approve', async () => (await wallet()).renew(where(), me));
+  await paintAllow();
 }
 async function paintMe() {
   $('#out').classList.toggle('hidden', !me);
@@ -102,6 +114,7 @@ async function ensureGame() {
   if (state.closed) throw new Error('closed for now.');
   say(me ? 'one moment…' : 'signing in…');
   if (!me) await signIn();
+  else if (needsAllowance()) await approve();
   const w = await wallet();
   // a cent over the price: the wallet pays a small network fee on top.
   const need = state.stake + 0.01;
@@ -110,8 +123,12 @@ async function ensureGame() {
   // money is the next tap, on the button that now says so.
   if (has < need && !store.get('paid')) throw Object.assign(new Error(`add money to play: tap “add money” at the top. ${state.max_turns} messages are ${money(state.stake)}.`), { keep: true });
   say(`${state.max_turns} messages for ${money(state.stake)}…`);
-  const res = await step('start a game', () => w.pay({ ...where(), token: state.token, most: String(state.stake), kept: store.get('paid'), keep: (proof) => store.set('paid', proof) },
-    '/api/agent/play', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }));
+  const res = await step('start a game', () => w.pay({ ...where(), account: me, token: state.token, most: String(state.stake), kept: store.get('paid'), keep: (proof) => store.set('paid', proof) },
+    '/api/agent/play', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).catch(async (e) => {
+    // nothing was paid. the wallet can open only straight after a tap, so the next tap asks it first.
+    if (e && e.renew) { await paintAllow(); allow = null; throw Object.assign(new Error(`tap send again: your wallet will ask you to approve up to $${ALLOWANCE} for messages.`), { keep: true }); }
+    throw e;
+  });
   const body = await res.json().catch(() => ({}));
   if (!res.ok || !body.session) throw failed(body, 'a game could not be started.');
   game = { id: body.session, left: body.turns_left };
