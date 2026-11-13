@@ -183,7 +183,9 @@ async function send(text) {
         bubble('won', w.late ? 'it said it, but someone beat you to it by a moment.'
           : `it said it. you won ${money(w.prize)}.${w.levy > 0 ? ` ${money(w.levy)} of the pot went to teaching it.` : ''} it is on its way to your wallet.`);
         endGame(); say(''); look();
-        for (let i = 0; i < 12; i++) { await sleep(5000); await paintMe(); }
+        // the prize is sent once the ai has learned from the loss, which can take a few minutes. the
+        // balance at the top is watched for it meanwhile; the page does not wait for it.
+        (async () => { const had = await holds().catch(() => 0); for (let i = 0; i < 30; i++) { await sleep(10000); if ((await paintMe().catch(() => 0)) > had) break; } })();
       } else if (game.left === 0) { endGame(); say(`that was your ${state.max_turns}. send again for ${state.max_turns} more (${money(state.stake)}).`); }
       else say(`${game.left} messages left`);
       break;
