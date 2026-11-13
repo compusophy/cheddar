@@ -128,6 +128,10 @@ const addMoney = () => step('add money', async () => {
 async function ensureGame() {
   if (game) return;
   if (state.closed) throw new Error('closed for now.');
+  // no game is being sold just now: nobody is asked to sign in or approve anything for one.
+  // (the game says so itself as well; this is only so that the wallet is not opened for nothing.)
+  if (state.learning) throw Object.assign(new Error('it just lost and is learning. try again in a minute.'), { keep: true });
+  if (state.awake === false) throw Object.assign(new Error('it is asleep right now. try again later.'), { keep: true });
   say(me ? 'one moment…' : 'signing in…');
   if (!me) await signIn();
   else if (needsAllowance()) await approve();
