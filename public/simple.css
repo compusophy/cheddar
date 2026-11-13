@@ -30,7 +30,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 0.5rem; padding: 0.9rem 0; }
 .brand { justify-self: start; display: inline-flex; align-items: center; gap: 0.4rem; font-weight: 750; font-size: 1.15rem; letter-spacing: -0.02em; }
 .brand img { display: block; width: 1.35em; height: 1.35em; }
-.brand em, h1 em { font-style: normal; color: var(--gold); }
+.brand em { font-style: normal; color: var(--gold); }
 .pot { margin: 0; display: flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
 .pot .label { color: var(--whey); font-size: 0.95rem; }
 .pot .amount { color: var(--gold); font-weight: 750; font-size: 1.3rem; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
