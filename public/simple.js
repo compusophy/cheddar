@@ -19,9 +19,12 @@ let game = null; // { id, left }
 let working = false;
 /** ?test: a throwaway key stands in for the wallet. play money only. */
 const wantsTest = new URLSearchParams(location.search).has('test');
-/** a day's allowance: the most this site may take from the wallet in a day without asking again. 20 rounds. */
-const PER_DAY = '5';
-const where = () => ({ testnet: !state.real, chainId: state.chain, test: wantsTest && !state.real, allow: { token: state.token, to: state.house, perDay: PER_DAY } });
+/**
+ * the most this site may ever take from the wallet without asking again: $5 in all (20 rounds of
+ * messages), paid only to the game, for a week at most. when it is used up the wallet asks again.
+ */
+const ALLOWANCE = '5';
+const where = () => ({ testnet: !state.real, chainId: state.chain, test: wantsTest && !state.real, allow: { token: state.token, to: state.house, total: ALLOWANCE } });
 
 let lib = null;
 const wallet = () => (lib ||= new Promise((ok, no) => {
@@ -54,7 +57,7 @@ function paint() {
   $('#pitch').textContent = `make the ai say “${state.word}”.`;
   $('#pot').textContent = state.learning ? 'it just lost. it is learning.' : state.awake === false ? 'it is asleep right now.' : state.jackpot > 0 ? `win ${money(state.jackpot)}.` : 'win the pot.';
   $('#price').textContent = `${state.max_turns} messages for ${money(state.stake)}`;
-  $('#how').textContent = `the ai has been told never to say “${state.word}”. you get ${state.max_turns} messages for ${money(state.stake)}. if it says the word in any reply, you win the pot. most of what you pay goes into the pot. every time it loses it learns, so the same trick does not work twice. you sign in and pay with tempo wallet: a passkey, no app. at sign-in you let this site take up to $${PER_DAY} a day for messages, and nothing else.`;
+  $('#how').textContent = `the ai has been told never to say “${state.word}”. you get ${state.max_turns} messages for ${money(state.stake)}. if it says the word in any reply, you win the pot. most of what you pay goes into the pot. every time it loses it learns, so the same trick does not work twice. you sign in and pay with tempo wallet: a passkey, no app. at sign-in you let this site take up to $${ALLOWANCE} in all, only for messages and only to the game, for a week at most. when that is used up the wallet asks you again.`;
 }
 async function look() { try { state = await get('/api/state'); paint(); } catch { /* keep what is shown */ } }
 

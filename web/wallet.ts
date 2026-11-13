@@ -13,19 +13,21 @@ import { parseUnits } from 'viem';
 
 /**
  * `test`: a throwaway key kept in this browser stands in for the wallet. play money only; the page refuses it on real money.
- * `allow`: at sign-in, the person is asked once to let this site spend up to `perDay` dollars of `token` a day,
- * paid only to `to`. after that a game is paid without opening the wallet again.
+ * `allow`: at sign-in, the person is asked once to let this site spend up to `total` dollars of `token`
+ * in all, paid only to `to`, within a week. it is a cap for the life of the permission, not a rate:
+ * once it is used up or the week is over, nothing more can be taken without asking again. until then
+ * a round of messages is paid without opening the wallet.
  */
-type Allow = { token: string; to: string; perDay: string };
+type Allow = { token: string; to: string; total: string };
 type Where = { testnet: boolean; chainId: number; test?: boolean; allow?: Allow };
-const DAY = 86_400;
+const WEEK = 7 * 86_400;
 const hex = (n: number) => `0x${n.toString(16)}` as `0x${string}`;
 const isAddress = (a: unknown): a is `0x${string}` => /^0x[0-9a-fA-F]{40}$/.test(String(a));
 
 let made: { key: string; provider: ReturnType<typeof Provider.create> } | null = null;
 function provider(o: Where) {
   const a = o.test ? undefined : o.allow;
-  const key = `${o.testnet}:${!!o.test}:${a ? `${a.token}:${a.to}:${a.perDay}` : ''}`;
+  const key = `${o.testnet}:${!!o.test}:${a ? `${a.token}:${a.to}:${a.total}` : ''}`;
   if (!made || made.key !== key) made = { key, provider: Provider.create({
     // the wallet opens as its own window, on its own site. a passkey is then used exactly as it is on
     // wallet.tempo.xyz itself. inside this page (the sdk's other way) the wallet's server refused it.
@@ -34,9 +36,10 @@ function provider(o: Where) {
     // the sdk can replace the page's fetch so that any 402 is paid without asking. it is not asked to:
     // a payment is made only where the page asks for one (see `pay`).
     mpp: false,
+    // no `period`: the limit is for the key's whole life, not a daily amount that comes back.
     ...(a ? { accessKey: { authorize: {
-      expiry: Math.floor(Date.now() / 1000) + 30 * DAY,
-      limits: [{ token: a.token as `0x${string}`, limit: parseUnits(a.perDay, 6), period: DAY }],
+      expiry: Math.floor(Date.now() / 1000) + WEEK,
+      limits: [{ token: a.token as `0x${string}`, limit: parseUnits(a.total, 6) }],
       scopes: [{ address: a.token as `0x${string}`, recipients: [a.to as `0x${string}`] }],
     } } } : {}),
   }) };
