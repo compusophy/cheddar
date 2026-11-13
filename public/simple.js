@@ -103,9 +103,13 @@ function plain(e) {
   const b = e && e.body;
   if (b && b.learning) return 'it just lost and is learning. try again in a minute.';
   if (b && b.asleep) return 'it is asleep right now. nothing was charged.';
+  // the game's own answer is already in words: none of the wallet's guesses below apply to it.
+  if (b && b.error) return String(b.error).slice(0, 240);
   const why = String((e && (e.shortMessage || e.message)) || e || '');
   if (/popup/i.test(why) && /block/i.test(why)) return 'your browser blocked the wallet. allow pop-ups for this site and try again.';
-  if ((e && e.code === 4001) || /reject|denied|cancel|closed|dismiss/i.test(why)) return 'the wallet was closed. nothing was charged.';
+  if ((e && e.code === 4001) || /reject|denied|cancel|closed|dismiss/i.test(why)) return e && e.step === 'stop' ? 'the wallet was closed. the allowance is still on.' : 'the wallet was closed. nothing was charged.';
+  if (/insufficient|exceeds (the )?balance/i.test(why)) return 'there is not enough in your wallet for that. tap “add money” at the top.';
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(why)) return 'the connection dropped. try again.';
   // which step it was, then what the wallet or the game said about it.
   return `${e && e.step ? `could not ${e.step}: ` : ''}${why.slice(0, 160) || 'that did not work.'}`;
 }
@@ -127,7 +131,7 @@ const addMoney = () => step('add money', async () => {
 /** a game to talk in: the one already open, or a new one paid for from the wallet. */
 async function ensureGame() {
   if (game) return;
-  if (state.closed) throw new Error('closed for now.');
+  if (state.closed) throw Object.assign(new Error('closed for now.'), { keep: true });
   // no game is being sold just now: nobody is asked to sign in or approve anything for one.
   // (the game says so itself as well; this is only so that the wallet is not opened for nothing.)
   if (state.learning) throw Object.assign(new Error('it just lost and is learning. try again in a minute.'), { keep: true });
