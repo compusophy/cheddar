@@ -45,8 +45,17 @@ function bubble(kind, text) {
 }
 function busy(on) { working = on; $('#send').disabled = on; $('#msg').disabled = on; if (!on) $('#msg').focus(); }
 const holds = async () => (me ? Number((await get('/api/balance/' + me)).balance) || 0 : 0);
+/** one line: how much of the allowance is left, and a way to end it. */
+async function paintAllow() {
+  const a = me && lib ? await (await wallet()).allowance(where(), me).catch(() => null) : null;
+  $('#allow').classList.toggle('hidden', !a);
+  if (a) $('#allowtext').textContent = `${money(a.left)} of your ${money(a.total)} left to play`;
+}
 async function paintMe() {
   $('#out').classList.toggle('hidden', !me);
+  // signed out: the price says what signing in will ask for.
+  if (state) $('#price').textContent = `${state.max_turns} messages for ${money(state.stake)}${me ? '' : ` · you approve up to $${ALLOWANCE} once`}`;
+  paintAllow();
   if (!me) { $('#me').textContent = 'sign in'; return 0; }
   const has = await holds().catch(() => 0);
   $('#me').textContent = has < state.stake + 0.01 ? 'add money' : money(has);
@@ -56,7 +65,7 @@ async function paintMe() {
 function paint() {
   $('#pitch').textContent = `make the ai say “${state.word}”.`;
   $('#pot').textContent = state.learning ? 'it just lost. it is learning.' : state.awake === false ? 'it is asleep right now.' : state.jackpot > 0 ? `win ${money(state.jackpot)}.` : 'win the pot.';
-  $('#price').textContent = `${state.max_turns} messages for ${money(state.stake)}`;
+  $('#price').textContent = `${state.max_turns} messages for ${money(state.stake)}${me ? '' : ` · you approve up to $${ALLOWANCE} once`}`;
   $('#how').textContent = `the ai has been told never to say “${state.word}”. you get ${state.max_turns} messages for ${money(state.stake)}. if it says the word in any reply, you win the pot. most of what you pay goes into the pot. every time it loses it learns, so the same trick does not work twice. you sign in and pay with tempo wallet: a passkey, no app. at sign-in you let this site take up to $${ALLOWANCE} in all, only for messages and only to the game, for a week at most. when that is used up the wallet asks you again.`;
 }
 async function look() { try { state = await get('/api/state'); paint(); } catch { /* keep what is shown */ } }
@@ -169,6 +178,14 @@ $('#me').onclick = async () => {
   } catch (e) { say(plain(e)); }
   busy(false);
 };
+$('#stop').onclick = async () => {
+  if (working || !me) return;
+  busy(true);
+  try { say('ending it…'); await step('stop', async () => (await wallet()).stop(where(), me)); say(`stopped. nothing more can be taken without asking you.`); }
+  catch (e) { say(plain(e)); }
+  await paintAllow();
+  busy(false);
+};
 $('#out').onclick = async () => {
   if (working) return;
   try { (await wallet()).disconnect(where()); } catch { /* signed out here either way */ }
@@ -187,6 +204,7 @@ $('#out').onclick = async () => {
       await w.warm(where());
       const known = await w.known(where());
       if (known && known !== me && !working) { me = known; store.set('me', me); paintMe(); }
+      else paintAllow();
     } catch { /* it is asked for again at the first tap, and says then what went wrong */ }
   }, 300);
   // a game left open in this browser is picked back up.

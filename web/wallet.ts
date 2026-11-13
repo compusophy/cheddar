@@ -9,7 +9,8 @@
 // built with `npm run build` in this folder; the result is public/vendor/tempo-wallet.js.
 import { Provider, tempoWallet, secp256k1, Mount } from 'accounts';
 import { Mppx, tempo } from 'mppx/client';
-import { parseUnits } from 'viem';
+import { parseUnits, formatUnits, toFunctionSelector } from 'viem';
+import { Actions } from 'viem/tempo';
 
 /**
  * `test`: a throwaway key kept in this browser stands in for the wallet. play money only; the page refuses it on real money.
@@ -21,12 +22,15 @@ import { parseUnits } from 'viem';
 type Allow = { token: string; to: string; total: string };
 type Where = { testnet: boolean; chainId: number; test?: boolean; allow?: Allow };
 const WEEK = 7 * 86_400;
+const TRANSFER = toFunctionSelector('transfer(address,uint256)');
+const TRANSFER_WITH_MEMO = toFunctionSelector('transferWithMemo(address,uint256,bytes32)');
 const hex = (n: number) => `0x${n.toString(16)}` as `0x${string}`;
 const isAddress = (a: unknown): a is `0x${string}` => /^0x[0-9a-fA-F]{40}$/.test(String(a));
 
 let made: { key: string; provider: ReturnType<typeof Provider.create> } | null = null;
 function provider(o: Where) {
-  const a = o.test ? undefined : o.allow;
+  // the test key is given the same allowance, so that the allowance itself can be tried on play money.
+  const a = o.allow;
   const key = `${o.testnet}:${!!o.test}:${a ? `${a.token}:${a.to}:${a.total}` : ''}`;
   if (!made || made.key !== key) made = { key, provider: Provider.create({
     // the wallet opens as its own window, on its own site. a passkey is then used exactly as it is on
@@ -40,10 +44,21 @@ function provider(o: Where) {
     ...(a ? { accessKey: { authorize: {
       expiry: Math.floor(Date.now() / 1000) + WEEK,
       limits: [{ token: a.token as `0x${string}`, limit: parseUnits(a.total, 6) }],
-      scopes: [{ address: a.token as `0x${string}`, recipients: [a.to as `0x${string}`] }],
+      // a payment for a round is a token transfer to the game, with or without a memo. nothing else may be signed with this key.
+      scopes: [TRANSFER, TRANSFER_WITH_MEMO].map((selector) => ({ address: a.token as `0x${string}`, selector, recipients: [a.to as `0x${string}`] })),
     } } } : {}),
   }) };
   return made.provider;
+}
+const same = (a: unknown, b: unknown) => String(a).toLowerCase() === String(b).toLowerCase();
+/** the allowance this page asked for, if this browser holds one that is still in date. */
+function heldKey(o: Where, account: string): any | null {
+  const a = o.allow;
+  if (!a) return null;
+  const keys: any[] = (provider(o) as any).store?.accessKeys?.list?.({ account, chainId: o.chainId }) ?? [];
+  return keys.find((k) => (!k.expiry || k.expiry * 1000 > Date.now())
+    && (k.scopes ?? []).some((s: any) => same(s.address, a.token) && (s.recipients ?? []).some((r: any) => same(r, a.to)))
+    && (k.limits ?? []).some((l: any) => same(l.token, a.token))) ?? null;
 }
 const first = (r: any): string | null => {
   const a = Array.isArray(r) ? r[0] : r?.accounts?.[0];
@@ -71,6 +86,29 @@ const api = {
     const address = first(await provider(o).request({ method: 'wallet_connect', ...(o.test ? { params: [{ capabilities: { method: 'register' } }] } : {}) } as any));
     if (!address) throw new Error('the wallet did not name an account');
     return address;
+  },
+  /**
+   * what is left of the allowance, in dollars, and when it ends. null: there is none, and the next
+   * payment will ask the wallet. a key that has not been used yet has all of it left.
+   */
+  async allowance(o: Where, account: string): Promise<{ left: number; total: number; until: number } | null> {
+    const k = heldKey(o, account);
+    if (!k) return null;
+    const total: bigint = k.limits.find((l: any) => same(l.token, o.allow!.token)).limit;
+    let left = total;
+    try {
+      const p: any = provider(o);
+      if ((await p.getAccessKeyStatus({ address: account, accessKey: k.address, chainId: o.chainId })) === 'published') {
+        left = (await Actions.accessKey.getRemainingLimit(p.getClient({ chainId: o.chainId }), { account: account as `0x${string}`, accessKey: k.address, token: o.allow!.token as `0x${string}` })).remaining;
+      }
+    } catch { /* could not be read just now: shown as it was granted */ }
+    return { left: Number(formatUnits(left, 6)), total: Number(formatUnits(total, 6)), until: Number(k.expiry || 0) };
+  },
+  /** end the allowance now. the wallet asks the person to confirm. afterwards nothing can be taken without asking. */
+  async stop(o: Where, account: string): Promise<void> {
+    const k = heldKey(o, account);
+    if (!k) return;
+    await provider(o).request({ method: 'wallet_revokeAccessKey', params: [{ address: account, accessKeyAddress: k.address, chainId: hex(o.chainId) }] } as any);
   },
   /** sign out of the wallet here. */
   async disconnect(o: Where): Promise<void> {
