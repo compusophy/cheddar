@@ -1,1 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="16" cy="16" r="15" fill="#f4c430"/></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <mask id="bites">
+      <rect width="32" height="32" fill="#fff"/>
+      <circle cx="30" cy="15" r="3.4" fill="#000"/>
+      <circle cx="9" cy="29.5" r="2.6" fill="#000"/>
+    </mask>
+  </defs>
+  <circle cx="16" cy="16" r="15" fill="#f4c430" mask="url(#bites)"/>
+  <g fill="#b8860b">
+    <circle cx="10.5" cy="11" r="3.6"/>
+    <circle cx="19.5" cy="20.5" r="4.2"/>
+    <circle cx="20.5" cy="8.5" r="2.2"/>
+    <circle cx="9.5" cy="21.5" r="2.3"/>
+  </g>
+</svg>
