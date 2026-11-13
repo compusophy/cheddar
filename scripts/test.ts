@@ -277,7 +277,7 @@ async function main() {
   // it is pinned: rebuild it (npm run build in web/), read what changed, and only then move this hash.
   const walletLib = fs.readFileSync(path.join(process.cwd(), 'public', 'vendor', 'tempo-wallet.js'));
   const walletHash = crypto.createHash('sha384').update(walletLib).digest('base64');
-  check('the wallet bundle is the one that was built and read', walletHash === '0I1VvUDg4lu53Qes0iZ8rsf/P68SZNmyeRAnojHcQBQYa9qLcEVOTBGd8VohKe5E', walletHash);
+  check('the wallet bundle is the one that was built and read', walletHash === 'W/EMkgtrBMzn9CuwagyGij5RPwbm98wDsCJ7mnYpTOIDjDYeRe1Ke/9Ms+OJb+CA', walletHash);
   // the $5 allowance runs out (its network fees count against it too), ends after a week, or is stopped.
   // the wallet then has to be asked for a new one, and it can open only straight after a tap: so the
   // tap asks it first, and a payment that finds none left says "tap again" instead of failing for ever.

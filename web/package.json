@@ -3,7 +3,7 @@
   "private": true,
   "description": "builds public/vendor/tempo-wallet.js: tempo's accounts sdk, bundled so the page can load it from its own origin. kept apart from the game so the game's own dependencies do not change.",
   "scripts": {
-    "build": "esbuild wallet.ts --bundle --format=iife --platform=browser --target=es2022 --minify --legal-comments=external --outfile=../public/vendor/tempo-wallet.js"
+    "build": "node build.mjs"
   },
   "devDependencies": {
     "accounts": "0.21.1",
