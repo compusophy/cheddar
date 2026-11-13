@@ -53,7 +53,7 @@ async function walletNow() {
 }
 const say = (text) => { $('#said').textContent = text || ''; };
 function bubble(kind, text) {
-  // once there is a conversation, the cheese and the big words step back to make room for it.
+  // once there is a conversation, the big words step back to make room for it.
   document.body.classList.add('talking');
   const p = document.createElement('p');
   p.className = kind; p.textContent = text;

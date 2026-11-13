@@ -1,4 +1,4 @@
-/* the simple page: the cheese, one line, a box to type in. */
+/* the simple page: one line, the pot, a box to type in. */
 :root { color-scheme: dark; --bg: #0b0b0c; --fg: #f2f0ea; --dim: #8f8c84; --line: #2a2a2e; --gold: #f4c430; --bubble: #1b1b1f; }
 * { box-sizing: border-box; }
 html, body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
@@ -16,13 +16,11 @@ main { flex: 1; display: flex; flex-direction: column; }
 #me { padding: 0.45rem 0.95rem; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--fg); }
 #me.want { border-color: var(--gold); background: var(--gold); color: #000; font-weight: 700; }
 
-/* before anyone talks: the cheese, the line, the pot, in the middle. once they do, it steps back. */
+/* before anyone talks: the line and the pot, in the middle. once they do, they step back. */
 .hero { text-align: center; margin: auto 0; padding: 2rem 0; transition: padding 0.2s; }
-.cheese { display: block; margin: 0 auto 1.25rem; width: 88px; height: 88px; }
 h1 { margin: 0; font-size: clamp(2rem, 8.5vw, 2.6rem); line-height: 1.08; font-weight: 800; letter-spacing: -0.03em; }
 .pot { margin: 0.5rem 0 0; font-size: clamp(2rem, 8.5vw, 2.6rem); line-height: 1.08; font-weight: 800; letter-spacing: -0.03em; color: var(--gold); }
 .talking .hero { margin: 0; padding: 0.5rem 0 1.25rem; }
-.talking .cheese { width: 44px; height: 44px; margin-bottom: 0.6rem; }
 .talking h1, .talking .pot { font-size: 1.35rem; letter-spacing: -0.01em; }
 
 #thread { display: flex; flex-direction: column; gap: 0.5rem; padding-bottom: 0.5rem; }
