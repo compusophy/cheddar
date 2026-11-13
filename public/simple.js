@@ -29,14 +29,28 @@ const ALLOWANCE = '5';
 const where = () => ({ testnet: !state.real, chainId: state.chain, test: wantsTest && !state.real, allow: { token: state.token, to: state.house, total: ALLOWANCE } });
 
 let lib = null;
+let libReady = false;
 const wallet = () => (lib ||= new Promise((ok, no) => {
   const s = document.createElement('script');
   s.src = '/vendor/tempo-wallet.js';
-  s.onload = () => (window.tempoWallet ? ok(window.tempoWallet) : no(new Error('the wallet did not load.')));
+  s.onload = () => (window.tempoWallet ? (libReady = true, ok(window.tempoWallet)) : no(new Error('the wallet did not load.')));
   s.onerror = () => { lib = null; no(new Error('the wallet did not load. check your connection.')); };
   document.head.appendChild(s);
 }));
 
+/**
+ * the wallet, for something that opens its window. a browser lets a page open a window only straight
+ * after a tap. if the wallet's code was still loading when the tap came, that tap is used up by the
+ * wait: the window is not tried late (a phone would block it), and the next tap opens it at once.
+ */
+async function walletNow() {
+  if (libReady) return wallet();
+  const began = Date.now();
+  say('one moment…');
+  const w = await wallet();
+  if (Date.now() - began > 800) throw Object.assign(new Error('ready now. tap again.'), { keep: true });
+  return w;
+}
 const say = (text) => { $('#said').textContent = text || ''; };
 function bubble(kind, text) {
   const p = document.createElement('p');
@@ -60,7 +74,7 @@ const needsAllowance = () => allow === null || (!!allow && allow.left < state.st
 /** ask the wallet for a new allowance. it opens, so this is the first thing a tap does. */
 async function approve() {
   say(`approve up to $${ALLOWANCE} in your wallet…`);
-  await step('approve', async () => (await wallet()).renew(where(), me));
+  await step('approve', async () => (await walletNow()).renew(where(), me));
   await paintAllow();
 }
 async function paintMe() {
@@ -84,6 +98,8 @@ async function look() { try { state = await get('/api/state'); paint(); } catch 
 
 /** in plain words, why something did not happen. */
 function plain(e) {
+  // the page's own words, already plain.
+  if (e && e.keep) return e.message;
   const b = e && e.body;
   if (b && b.learning) return 'it just lost and is learning. try again in a minute.';
   if (b && b.asleep) return 'it is asleep right now. nothing was charged.';
@@ -99,12 +115,12 @@ const step = async (name, fn) => { try { return await fn(); } catch (e) { throw 
 
 async function signIn() {
   // straight to the wallet: on a phone it opens in its own window, which a browser allows only right after a tap.
-  me = await step('sign in', async () => (await wallet()).connect(where()));
+  me = await step('sign in', async () => (await walletNow()).connect(where()));
   store.set('me', me);
   return paintMe();
 }
 const addMoney = () => step('add money', async () => {
-  const w = await wallet();
+  const w = await walletNow();
   if (where().test) await fetch(state.rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tempo_fundAddress', params: [me] }) });
   else await w.deposit({ ...where(), address: me, token: state.token, amount: '5.00' });
 });
@@ -191,14 +207,15 @@ $('#me').onclick = async () => {
   busy(true);
   try {
     if (!me) { say('signing in…'); await signIn(); say(''); }
-    else { say('adding money…'); const had = await holds(); await addMoney(); let has = had; for (let i = 0; i < 20 && has <= had; i++) { await sleep(3000); has = await paintMe(); } say(has > had ? `${money(has - had)} added. now send your message.` : 'the money is not there yet. it can take a few minutes.'); }
+    // the wallet opens first, straight from the tap; the balance it is measured against is read meanwhile.
+    else { say('adding money…'); const before = holds().catch(() => 0); await addMoney(); const had = await before; let has = had; for (let i = 0; i < 20 && has <= had; i++) { await sleep(3000); has = await paintMe(); } say(has > had ? `${money(has - had)} added. now send your message.` : 'the money is not there yet. it can take a few minutes.'); }
   } catch (e) { say(plain(e)); }
   busy(false);
 };
 $('#stop').onclick = async () => {
   if (working || !me) return;
   busy(true);
-  try { say('ending it…'); await step('stop', async () => (await wallet()).stop(where(), me)); say(`stopped. nothing more can be taken without asking you.`); }
+  try { say('ending it…'); await step('stop', async () => (await walletNow()).stop(where(), me)); say(`stopped. nothing more can be taken without asking you.`); }
   catch (e) { say(plain(e)); }
   await paintAllow();
   busy(false);

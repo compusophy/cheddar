@@ -286,6 +286,11 @@ async function main() {
   const simpleJs = fs.readFileSync(path.join(process.cwd(), 'public', 'simple.js'), 'utf8');
   const askFirst = simpleJs.indexOf('else if (needsAllowance()) await approve();');
   check('a tap with no allowance left asks the wallet before anything else, then pays', askFirst > 0 && askFirst < simpleJs.indexOf('w.pay('));
+  // the wallet's code is big: it is fetched as the page loads, and a tap that came before it was ready
+  // is not used to open the wallet's window late (a phone blocks that); the next tap opens it.
+  const front = fs.readFileSync(path.join(process.cwd(), 'public', 'index.html'), 'utf8');
+  check('the front door starts fetching the wallet as it loads', /<link rel="preload" href="\/vendor\/tempo-wallet\.js" as="script">/.test(front));
+  check('every tap that opens the wallet waits for nothing first, or asks for another tap', ['sign in', 'approve', 'add money', 'stop'].every((s) => new RegExp(`step\\('${s}', async \\(\\) => \\{?\\s*(const w = )?\\(?await walletNow\\(\\)`).test(simpleJs)) && !/await wallet\(\)\)\.(connect|renew|deposit|stop)\(/.test(simpleJs));
   const renewLine = simpleJs.split('\n').find((l) => l.includes('if (e && e.renew)')) ?? '';
   check('a payment that finds none left keeps the message and says to tap again', renewLine.includes('allow = null') && renewLine.includes('tap send again') && renewLine.includes('keep: true'), renewLine);
   check('the page frames the wallet and nothing else', /(^|;)\s*frame-src https:\/\/wallet\.tempo\.xyz\s*(;|$)/.test(policy) && !/frame-src[^;]*(\*|'self'|http:)/.test(policy), policy);
