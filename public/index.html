@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0b0b0c">
+<meta name="theme-color" content="#15120c">
 <title>say cheese</title>
 <meta name="description" content="make the ai say cheese and win the pot">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
@@ -14,14 +14,15 @@
 <meta property="og:title" content="make the ai say “cheese”">
 <meta property="og:description" content="win the pot · 25 messages for 25¢">
 <meta property="og:url" content="https://cheddar-one.vercel.app/">
-<meta property="og:image" content="https://cheddar-one.vercel.app/card.png?v=3">
+<meta property="og:image" content="https://cheddar-one.vercel.app/card.png?v=4">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="say cheese: make the ai say cheese. win the pot. 25 messages for 25 cents.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="make the ai say “cheese”">
 <meta name="twitter:description" content="win the pot · 25 messages for 25¢">
-<meta name="twitter:image" content="https://cheddar-one.vercel.app/card.png?v=3">
+<meta name="twitter:image" content="https://cheddar-one.vercel.app/card.png?v=4">
+<link rel="preload" href="/fonts/bricolage-grotesque.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/simple.css">
 <!-- the wallet's code is big. it starts downloading now, so it is ready by the first tap. -->
 <link rel="preload" href="/vendor/tempo-wallet.js" as="script">
@@ -30,12 +31,13 @@
 <div class="app">
 <header>
   <b class="brand" aria-label="say cheese">say<em>cheese</em></b>
+  <p id="pot" class="pot"></p>
   <button id="me" type="button">sign in</button>
 </header>
 <main>
   <section class="hero">
     <h1 id="pitch">make the ai say “cheese”</h1>
-    <p id="pot" class="pot"></p>
+    <p id="mood" class="mood hidden"></p>
   </section>
   <div id="thread" aria-live="polite"></div>
 </main>
@@ -46,13 +48,13 @@
     <button id="send">send</button>
   </form>
   <p id="price" class="dim"></p>
-  <p id="allow" class="dim hidden"><span id="allowtext"></span><span id="stopper"> · <button id="stop" type="button" class="link">stop</button></span></p>
+  <p id="allow" class="dim hidden"><span id="allowtext"></span><span id="stopper"><button id="stop" type="button" class="link">stop</button></span></p>
 </div>
 <footer>
   <details>
     <summary>how it works</summary>
     <ul id="how"></ul>
-    <p class="more"><a href="/classic.html">its rules and every past win</a><span id="outer" class="hidden"> · <button id="out" type="button" class="link">sign out</button></span></p>
+    <p class="more"><a href="/classic.html">its rules and every past win</a><span id="outer" class="hidden"><button id="out" type="button" class="link">sign out</button></span></p>
   </details>
 </footer>
 </div>

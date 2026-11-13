@@ -1,54 +1,86 @@
-/* the simple page: one line, the pot, a box to type in. */
-:root { color-scheme: dark; --bg: #0b0b0c; --fg: #f2f0ea; --dim: #8f8c84; --line: #2a2a2e; --gold: #f4c430; --bubble: #1b1b1f; }
+/* the simple page: the pot up top, one line in the middle, a box to type in at the bottom. */
+@font-face {
+  font-family: 'Bricolage Grotesque';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 200 800;
+  src: url(/fonts/bricolage-grotesque.woff2) format('woff2-variations');
+}
+:root {
+  color-scheme: dark;
+  --rind: #15120c;    /* the page */
+  --cellar: #231e15;  /* its replies, the box to type in */
+  --seam: #3a3224;    /* edges */
+  --cream: #f6eedb;   /* words */
+  --whey: #a3987f;    /* quieter words */
+  --gold: #f4c430;    /* the pot, your messages, send */
+  --crust: #1a1408;   /* words on gold */
+}
 * { box-sizing: border-box; }
-html, body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+html, body { margin: 0; background: var(--rind); color: var(--cream); }
+body { font: 400 17px/1.45 'Bricolage Grotesque', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; font-optical-sizing: auto; -webkit-font-smoothing: antialiased; }
 .hidden { display: none !important; }
-button { font: inherit; cursor: pointer; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
 
-/* one column, the full height of the screen: the box to type in sits at the bottom, the footer under it. */
-.app { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; max-width: 34rem; margin: 0 auto; padding: 0 1rem; }
-header { display: flex; justify-content: space-between; align-items: center; padding: 1rem 0; }
+/* one column, the full height of the screen: the box sits at the bottom, the footer under it. */
+.app { display: flex; flex-direction: column; min-height: 100vh; min-height: 100dvh; max-width: 34rem; margin: 0 auto; padding: 0 1.1rem; }
+
+/* name on the left, the pot in the middle, the wallet on the right */
+header { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 0.5rem; padding: 0.9rem 0; }
+.brand { justify-self: start; font-weight: 750; font-size: 1.15rem; letter-spacing: -0.02em; }
+.brand em { font-style: normal; color: var(--gold); }
+.pot { margin: 0; display: flex; align-items: baseline; gap: 0.35rem; white-space: nowrap; }
+.pot .label { color: var(--whey); font-size: 0.95rem; }
+.pot .amount { color: var(--gold); font-weight: 750; font-size: 1.3rem; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+#me { justify-self: end; padding: 0.42rem 0.9rem; border: 1px solid var(--seam); border-radius: 999px; background: transparent; font-weight: 550; white-space: nowrap; }
+#me.want { border-color: var(--gold); background: var(--gold); color: var(--crust); font-weight: 700; }
+
 main { flex: 1; display: flex; flex-direction: column; }
 
-/* the name, as one word in two colours */
-.brand { font-weight: 800; font-size: 1.1rem; letter-spacing: -0.01em; }
-.brand em { font-style: normal; color: var(--gold); }
-#me { padding: 0.45rem 0.95rem; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: var(--fg); }
-#me.want { border-color: var(--gold); background: var(--gold); color: #000; font-weight: 700; }
+/* before anyone talks, the one line is the whole page */
+.hero { margin: auto 0; padding: 2rem 0 3rem; text-align: center; }
+h1 { margin: 0 auto; max-width: 9.5em; font-size: clamp(2.7rem, 12.5vw, 4.25rem); line-height: 0.95; font-weight: 780; letter-spacing: -0.045em; text-wrap: balance; }
+.mood { margin: 1.1rem 0 0; color: var(--whey); font-size: 1.05rem; }
+/* once they do, the line gives way to the conversation */
+.talking .hero { margin: 0; padding: 0.25rem 0 0.75rem; }
+.talking h1 { display: none; }
+.talking .mood { margin: 0; }
 
-/* before anyone talks: the line and the pot, in the middle. once they do, they step back. */
-.hero { text-align: center; margin: auto 0; padding: 2rem 0; transition: padding 0.2s; }
-h1 { margin: 0; font-size: clamp(2rem, 8.5vw, 2.6rem); line-height: 1.08; font-weight: 800; letter-spacing: -0.03em; }
-.pot { margin: 0.5rem 0 0; font-size: clamp(2rem, 8.5vw, 2.6rem); line-height: 1.08; font-weight: 800; letter-spacing: -0.03em; color: var(--gold); }
-.talking .hero { margin: 0; padding: 0.5rem 0 1.25rem; }
-.talking h1, .talking .pot { font-size: 1.35rem; letter-spacing: -0.01em; }
+#thread { display: flex; flex-direction: column; gap: 0.45rem; padding: 0.5rem 0; }
+#thread p { max-width: 84%; margin: 0; padding: 0.62rem 0.95rem; border-radius: 1.25rem; overflow-wrap: anywhere; white-space: pre-wrap; }
+#thread .me { align-self: flex-end; background: var(--gold); color: var(--crust); border-bottom-right-radius: 0.35rem; }
+#thread .it { align-self: flex-start; background: var(--cellar); border-bottom-left-radius: 0.35rem; }
+#thread .won { align-self: stretch; max-width: none; margin: 0.4rem 0; padding: 1.1rem; border-radius: 1.25rem; background: var(--gold); color: var(--crust); font-weight: 750; font-size: 1.15rem; text-align: center; }
 
-#thread { display: flex; flex-direction: column; gap: 0.5rem; padding-bottom: 0.5rem; }
-#thread p { max-width: 85%; margin: 0; padding: 0.65rem 0.95rem; border-radius: 1.2rem; overflow-wrap: anywhere; white-space: pre-wrap; }
-#thread .me { align-self: flex-end; background: var(--gold); color: #000; border-bottom-right-radius: 0.4rem; }
-#thread .it { align-self: flex-start; background: var(--bubble); border-bottom-left-radius: 0.4rem; }
-#thread .won { align-self: stretch; max-width: none; background: var(--gold); color: #000; font-weight: 700; text-align: center; border-radius: 1.2rem; padding: 1rem; }
-
-/* the box to type in, kept in reach at the bottom of the screen */
-.dock { position: sticky; bottom: 0; padding: 0.5rem 0 0.25rem; background: linear-gradient(to bottom, transparent, var(--bg) 0.75rem); text-align: center; }
-.said { min-height: 1.45em; margin: 0 0 0.5rem; color: var(--dim); font-size: 0.95rem; }
+/* the box to type in, kept in reach at the bottom */
+.dock { position: sticky; bottom: 0; padding: 0.4rem 0 0.2rem; background: linear-gradient(to bottom, rgba(21, 18, 12, 0), var(--rind) 0.8rem); text-align: center; }
+.said { min-height: 1.45em; margin: 0 0 0.45rem; color: var(--whey); font-size: 0.95rem; }
 form { display: flex; gap: 0.5rem; }
-#msg { flex: 1; min-width: 0; padding: 0.85rem 1.1rem; border: 1px solid var(--line); border-radius: 999px; background: #131316; color: var(--fg); font: inherit; }
-#msg:focus { outline: none; border-color: var(--dim); }
-#send { padding: 0.85rem 1.4rem; border: none; border-radius: 999px; background: var(--gold); color: #000; font-weight: 700; }
+#msg { flex: 1; min-width: 0; padding: 0.85rem 1.15rem; border: 1px solid var(--seam); border-radius: 999px; background: var(--cellar); color: var(--cream); font: inherit; }
+#msg::placeholder { color: var(--whey); }
+#msg:focus { outline: none; border-color: rgba(244, 196, 48, 0.6); }
+#send { padding: 0.85rem 1.35rem; border: none; border-radius: 999px; background: var(--gold); color: var(--crust); font-weight: 750; }
 #send:disabled, #msg:disabled { opacity: 0.5; cursor: default; }
-.dim { margin: 0.6rem 0 0; color: var(--dim); font-size: 0.9rem; }
-#allow { margin-top: 0.2rem; }
-button.link { padding: 0; border: none; background: none; color: var(--dim); text-decoration: underline; text-underline-offset: 2px; }
+.dim { margin: 0.65rem 0 0; color: var(--whey); font-size: 0.92rem; }
+#allow { margin-top: 0.15rem; }
+#stopper, #outer { margin-left: 0.75rem; }
+button.link { padding: 0; border: none; background: none; color: var(--whey); text-decoration: underline; text-underline-offset: 3px; }
 
-/* how it works: a link at the bottom, in the middle */
-footer { padding: 1rem 0 calc(1.25rem + env(safe-area-inset-bottom)); text-align: center; color: var(--dim); font-size: 0.9rem; }
+/* how it works: a quiet link at the bottom, in the middle */
+footer { padding: 0.9rem 0 calc(1.2rem + env(safe-area-inset-bottom)); text-align: center; color: var(--whey); font-size: 0.92rem; }
 summary { display: inline-block; list-style: none; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 summary::-webkit-details-marker { display: none; }
-#how { list-style: none; margin: 1rem auto 0; padding: 1rem 1.25rem; max-width: 26rem; border: 1px solid var(--line); border-radius: 1rem; line-height: 1.5; }
-#how li + li { margin-top: 0.45rem; }
-.more { margin: 0.9rem 0 0; }
-.more a { color: var(--dim); text-underline-offset: 2px; }
+#how { list-style: none; margin: 1rem auto 0; padding: 0; max-width: 22rem; color: var(--cream); line-height: 1.4; }
+#how li { text-wrap: balance; }
+#how li + li { margin-top: 0.6rem; }
+.more { margin: 1.1rem 0 0; }
+.more a { color: var(--whey); text-underline-offset: 3px; }
+
+@media (prefers-reduced-motion: no-preference) {
+  #thread p { animation: rise 0.18s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(4px); } }
+}
 
 /* the wallet's sdk would set this with an inline style, which this site's policy does not run */
 dialog[data-tempo-wallet-postmessage]::backdrop { background: transparent !important; }

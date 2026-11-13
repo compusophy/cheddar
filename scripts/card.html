@@ -6,20 +6,21 @@
 <!-- the picture a shared link shows (public/card.png). render it at 1200x630 with headless chrome:
      chrome --headless=new --hide-scrollbars --force-device-scale-factor=1 --window-size=1200,630 --screenshot=public/card.png scripts/card.html -->
 <style>
-:root { --bg: #0b0b0c; --fg: #f2f0ea; --dim: #8f8c84; --line: #26262a; --gold: #f4c430; --bubble: #1a1a1d; }
+@font-face { font-family: 'Bricolage Grotesque'; font-weight: 200 800; src: url(../public/fonts/bricolage-grotesque.woff2) format('woff2-variations'); }
+:root { --bg: #15120c; --fg: #f6eedb; --dim: #a3987f; --line: #3a3224; --gold: #f4c430; --bubble: #231e15; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { width: 1200px; height: 630px; overflow: hidden; background: var(--bg); color: var(--fg); }
-body { font-family: "Segoe UI", system-ui, -apple-system, sans-serif; display: grid; grid-template-columns: 640px 1fr; }
+body { font-family: 'Bricolage Grotesque', 'Segoe UI', sans-serif; font-optical-sizing: auto; display: grid; grid-template-columns: 640px 1fr; }
 em { font-style: normal; color: var(--gold); }
 .left { padding: 60px 0 60px 72px; display: flex; flex-direction: column; justify-content: space-between; }
-.brand { display: flex; align-items: center; gap: 14px; font-weight: 700; font-size: 34px; }
-h1 { font-weight: 700; font-size: 74px; line-height: 1.08; letter-spacing: -1px; }
+.brand { font-weight: 750; font-size: 36px; letter-spacing: -0.02em; }
+h1 { font-weight: 780; font-size: 84px; line-height: 0.95; letter-spacing: -0.045em; }
 h1 .pot { display: block; margin-top: 14px; color: var(--gold); }
 .price { color: var(--dim); font-size: 30px; }
 .right { padding: 64px 64px 64px 24px; display: flex; flex-direction: column; justify-content: center; gap: 16px; }
 .right p { max-width: 86%; padding: 16px 24px; border-radius: 30px; font-size: 28px; line-height: 1.35; }
-.me { align-self: flex-end; background: var(--gold); color: #000; }
-.it { align-self: flex-start; background: var(--bubble); }
+.me { align-self: flex-end; background: var(--gold); color: #1a1408; border-bottom-right-radius: 10px; }
+.it { align-self: flex-start; background: var(--bubble); border-bottom-left-radius: 10px; }
 </style>
 </head>
 <body>

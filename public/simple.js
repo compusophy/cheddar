@@ -34,7 +34,7 @@ const wallet = () => (lib ||= new Promise((ok, no) => {
   const s = document.createElement('script');
   s.src = '/vendor/tempo-wallet.js';
   s.onload = () => (window.tempoWallet ? (libReady = true, ok(window.tempoWallet)) : no(new Error('the wallet did not load')));
-  s.onerror = () => { lib = null; no(new Error('the wallet did not load — check your connection')); };
+  s.onerror = () => { lib = null; no(new Error('the wallet did not load, check your connection')); };
   document.head.appendChild(s);
 }));
 
@@ -48,7 +48,7 @@ async function walletNow() {
   const began = Date.now();
   say('one moment…');
   const w = await wallet();
-  if (Date.now() - began > 400) throw Object.assign(new Error('ready now — tap again'), { keep: true });
+  if (Date.now() - began > 400) throw Object.assign(new Error('ready now, tap again'), { keep: true });
   return w;
 }
 const say = (text) => { $('#said').textContent = text || ''; };
@@ -69,7 +69,7 @@ async function paintAllow() {
   const spent = a && a.left < state.stake + 0.01;
   $('#allow').classList.toggle('hidden', !a);
   $('#stopper').classList.toggle('hidden', !!spent);
-  if (a) $('#allowtext').textContent = spent ? `your ${money(a.total)} is used up — your wallet asks before the next round` : `${money(a.left)} of your ${money(a.total)} left to play`;
+  if (a) $('#allowtext').textContent = spent ? `your ${money(a.total)} is used up, your wallet asks before the next round` : `${money(a.left)} of your ${money(a.total)} left to play`;
 }
 /** no allowance to pay from, or too little of it: the wallet must be asked for a new one first. */
 const needsAllowance = () => allow === null || (!!allow && allow.left < state.stake + 0.01);
@@ -89,6 +89,8 @@ async function paintMe() {
   $('#outer').classList.toggle('hidden', !me);
   paintAllow();
   if (!me) { $('#me').textContent = 'sign in'; return 0; }
+  // signed in: never "sign in", even for the moment the balance takes to arrive
+  if ($('#me').textContent === 'sign in') $('#me').textContent = '…';
   const has = await holds().catch(() => 0);
   $('#me').textContent = has < state.stake + 0.01 ? 'add money' : money(has);
   $('#me').classList.toggle('want', has < state.stake + 0.01);
@@ -96,7 +98,13 @@ async function paintMe() {
 }
 function paint() {
   $('#pitch').textContent = `make the ai say “${state.word}”`;
-  $('#pot').textContent = state.learning ? 'it just lost — it’s learning' : state.awake === false ? 'it’s asleep right now' : state.jackpot > 0 ? `win ${money(state.jackpot)}` : 'win the pot';
+  // the pot, in the middle of the header
+  const part = (cls, text) => Object.assign(document.createElement('span'), { className: cls, textContent: text });
+  $('#pot').replaceChildren(part('label', 'pot'), part('amount', money(state.jackpot)));
+  // when no game is being sold, the one line says why
+  const mood = state.learning ? 'it just lost and is learning a new trick' : state.awake === false ? 'it’s asleep right now, back soon' : '';
+  $('#mood').textContent = mood;
+  $('#mood').classList.toggle('hidden', !mood);
   $('#price').textContent = `${state.max_turns} messages for ${money(state.stake)}`;
   // a few short lines, not a paragraph
   const how = [
@@ -104,7 +112,7 @@ function paint() {
     'get it to say it and the pot is yours',
     'most of what you pay goes into the pot',
     'every time it loses it learns, so a trick only works once',
-    `you pay with tempo wallet — you approve up to $${ALLOWANCE}, good for a week`,
+    `you pay with tempo wallet and approve up to $${ALLOWANCE}, good for a week`,
   ];
   $('#how').replaceChildren(...how.map((t) => Object.assign(document.createElement('li'), { textContent: t })));
 }
@@ -115,15 +123,15 @@ function plain(e) {
   // the page's own words, already plain.
   if (e && e.keep) return e.message;
   const b = e && e.body;
-  if (b && b.learning) return 'it just lost and is learning — try again in a minute';
-  if (b && b.asleep) return 'it’s asleep right now — nothing was charged';
+  if (b && b.learning) return 'it just lost and is learning, try again in a minute';
+  if (b && b.asleep) return 'it’s asleep right now, nothing was charged';
   // the game's own answer is already in words: none of the wallet's guesses below apply to it.
   if (b && b.error) return String(b.error).slice(0, 240);
   const why = String((e && (e.shortMessage || e.message)) || e || '');
-  if (/popup/i.test(why) && /block/i.test(why)) return 'your browser blocked the wallet — allow pop-ups for this site and try again';
-  if ((e && e.code === 4001) || /reject|denied|cancel|closed|dismiss/i.test(why)) return e && e.step === 'stop' ? 'wallet closed — your allowance is still on' : 'wallet closed — nothing was charged';
-  if (/insufficient|exceeds (the )?balance/i.test(why)) return 'not enough in your wallet — tap “add money” at the top';
-  if (/failed to fetch|networkerror|load failed|network request failed/i.test(why)) return 'the connection dropped — try again';
+  if (/popup/i.test(why) && /block/i.test(why)) return 'your browser blocked the wallet, allow pop-ups for this site and try again';
+  if ((e && e.code === 4001) || /reject|denied|cancel|closed|dismiss/i.test(why)) return e && e.step === 'stop' ? 'wallet closed, your allowance is still on' : 'wallet closed, nothing was charged';
+  if (/insufficient|exceeds (the )?balance/i.test(why)) return 'not enough in your wallet, tap “add money” at the top';
+  if (/failed to fetch|networkerror|load failed|network request failed/i.test(why)) return 'the connection dropped, try again';
   // which step it was, then what the wallet or the game said about it.
   return `${e && e.step ? `could not ${e.step}: ` : ''}${why.slice(0, 160) || 'that did not work'}`;
 }
@@ -148,8 +156,8 @@ async function ensureGame() {
   if (state.closed) throw Object.assign(new Error('closed for now'), { keep: true });
   // no game is being sold just now: nobody is asked to sign in or approve anything for one.
   // (the game says so itself as well; this is only so that the wallet is not opened for nothing.)
-  if (state.learning) throw Object.assign(new Error('it just lost and is learning — try again in a minute'), { keep: true });
-  if (state.awake === false) throw Object.assign(new Error('it’s asleep right now — try again later'), { keep: true });
+  if (state.learning) throw Object.assign(new Error('it just lost and is learning, try again in a minute'), { keep: true });
+  if (state.awake === false) throw Object.assign(new Error('it’s asleep right now, try again later'), { keep: true });
   say(me ? 'one moment…' : 'signing in…');
   if (!me) await signIn();
   // (a round already paid for, whose answer was lost, is picked up with its proof: no new allowance for that.)
@@ -160,7 +168,7 @@ async function ensureGame() {
   const has = await paintMe();
   // the wallet's window opens only straight after a tap, and signing in has just used this one: adding
   // money is the next tap, on the button that now says so.
-  if (has < need && !store.get('paid')) throw Object.assign(new Error('add money to play — tap “add money” at the top'), { keep: true });
+  if (has < need && !store.get('paid')) throw Object.assign(new Error('add money to play, tap “add money” at the top'), { keep: true });
   say(`${state.max_turns} messages for ${money(state.stake)}…`);
   const res = await step('start a game', () => w.pay({ ...where(), account: me, token: state.token, most: String(state.stake), kept: store.get('paid'), keep: (proof) => store.set('paid', proof) },
     '/api/agent/play', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).catch(async (e) => {
@@ -192,7 +200,7 @@ async function send(text) {
       // it learned from someone else's win mid-game: the messages that were left carry over, no charge.
       if (status === 409 && body.carry && tries < 3) {
         const c = await post('/api/agent/play', { session: game.id });
-        if (c.status === 200 && c.body.session) { setGame({ id: c.body.session, left: c.body.turns_left }); say('it learned a new trick — your messages carry on, free'); continue; }
+        if (c.status === 200 && c.body.session) { setGame({ id: c.body.session, left: c.body.turns_left }); say('it learned a new trick, your messages carry on for free'); continue; }
       }
       if (status !== 200) { if (status === 409 || status === 404) endGame(); throw failed(body, 'that did not go through'); }
       mine = null;
@@ -201,13 +209,13 @@ async function send(text) {
       game.left = body.turnsLeft;
       if (body.win) {
         const w = body.win;
-        bubble('won', w.late ? 'it said it — but someone beat you to it by a moment'
-          : `it said it — you won ${money(w.prize)}${w.levy > 0 ? ` (${money(w.levy)} went to teaching it)` : ''}, on its way to your wallet`);
+        bubble('won', w.late ? 'it said it, but someone beat you to it by a moment'
+          : `you won ${money(w.prize)}${w.levy > 0 ? ` (${money(w.levy)} went to teaching it)` : ''}, it’s on its way to your wallet`);
         endGame(); say(''); look();
         // the prize is sent once the ai has learned from the loss, which can take a few minutes. the
         // balance at the top is watched for it meanwhile; the page does not wait for it.
         (async () => { const had = await holds().catch(() => 0); for (let i = 0; i < 30; i++) { await sleep(10000); if ((await paintMe().catch(() => 0)) > had) break; } })();
-      } else if (game.left === 0) { endGame(); say(`that was your ${state.max_turns} — send again for ${state.max_turns} more`); }
+      } else if (game.left === 0) { endGame(); say(`that was your ${state.max_turns}, send again for ${state.max_turns} more`); }
       else say(`${game.left} messages left`);
       break;
     }
@@ -235,14 +243,14 @@ $('#me').onclick = async () => {
   try {
     if (!me) { say('signing in…'); await signIn(); say(''); }
     // the wallet opens first, straight from the tap; the balance it is measured against is read meanwhile.
-    else { say('adding money…'); const before = holds().catch(() => 0); await addMoney(); const had = await before; let has = had; for (let i = 0; i < 20 && has <= had; i++) { await sleep(3000); has = await paintMe(); } say(has > had ? `${money(has - had)} added — now send your message` : 'not there yet — it can take a few minutes'); }
+    else { say('adding money…'); const before = holds().catch(() => 0); await addMoney(); const had = await before; let has = had; for (let i = 0; i < 20 && has <= had; i++) { await sleep(3000); has = await paintMe(); } say(has > had ? `${money(has - had)} added, now send your message` : 'not there yet, it can take a few minutes'); }
   } catch (e) { say(plain(e)); }
   busy(false);
 };
 $('#stop').onclick = async () => {
   if (working || !me) return;
   busy(true);
-  try { say('ending it…'); const ended = await step('stop', async () => (await walletNow()).stop(where(), me)); say(ended ? 'stopped — nothing more can be taken without asking you' : 'nothing to stop — nothing can be taken without asking you'); }
+  try { say('ending it…'); const ended = await step('stop', async () => (await walletNow()).stop(where(), me)); say(ended ? 'stopped, nothing more can be taken without asking you' : 'nothing to stop, nothing can be taken without asking you'); }
   catch (e) { say(plain(e)); }
   await paintAllow();
   busy(false);
@@ -255,7 +263,7 @@ $('#out').onclick = async () => {
 
 (async () => {
   await look();
-  if (!state) { say('the game isn’t answering — try again in a moment'); return; }
+  if (!state) { say('the game isn’t answering, try again in a moment'); return; }
   paintMe();
   // the wallet's code is fetched and made ready now, so that the first tap can open it at once.
   // if this browser is already signed in to the wallet, the page knows who it is talking to.
